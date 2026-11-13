@@ -1,0 +1,179 @@
+# **🏗️ 부동산 검색조건 설정 시스템 아키텍처 설계서 (ADD v1.5)**
+
+## **1. 개요 및 문서 정합성 (Overview)**
+본 문서는 **기능요구서(FRD v1.5)** 및 **디자인 요구서(DRD v1.5)**의 다단계 행정구역 선택, 지도 벡터 양방향 상호작용, 복합 속성 필터, 실시간 매물 건수 집계 및 5개 OS(Android, iOS, Web, Windows, macOS) 단일 코드베이스 배포 요구사항을 구현하기 위한 **시스템 아키텍처, 데이터베이스 스키마, API 상세 명세 및 플랫폼 추상화 전략**을 정의합니다.
+
+---
+
+## **2. 크로스 플랫폼 통합 아키텍처 및 모노레포 구조 (Tech Stack)**
+
+### **2.1. 5개 플랫폼 단일 코드베이스 전략**
+**Next.js (Static Export) + React + TypeScript + Zustand** 코어를 100% 공유하면서 배포 타겟별 패키징 레이어만 분리하는 **Turborepo 기반 모노레포** 아키텍처를 채택합니다.
+
+| 구분 | 선정 기술 | 선정 이유 및 아키텍처 반영 사항 |
+| :--- | :--- | :--- |
+| **Core Frontend** | **Next.js (Static Export) + React + TypeScript + Zustand** | - 5개 플랫폼 공통 UI 및 `Zustand` 기반 계층형 행정구역 트리(`selectedRegionTree`, Partial Sync) 관리 |
+| **Web / PWA** | **Next.js + Service Worker** | - 표준 웹 브라우저 배포 및 오프라인 캐싱(`IndexedDB` + `ETag`) |
+| **Mobile App** | **Capacitor v6 (Android / iOS)** | - `@capacitor/filesystem`: iOS Safari 7일 캐시 자동 삭제(ITP) 우회 영구 저장<br>- `@capacitor/geolocation`: 현재 위치 이동 / `@capacitor/keyboard`: 가상 키보드 높이 감지 |
+| **Desktop App** | **Tauri v2 (Windows / macOS)** | - Rust 기반 경량 런타임으로 다중 폴리곤 렌더링 성능 극대화<br>- `@tauri-apps/plugin-fs`: 로컬 디스크에 `TopoJSON` 영구 캐싱 및 OS 단축키 연동 |
+| **Map Engine** | **MapLibre GL JS (WebGL)** | - 플랫폼별 도메인/해시키 인증 제약을 제거한 단일 WebGL 벡터 렌더링 엔진<br>- `feature-state` 기반 GPU 가속 스타일 전환 및 디바이스 GPU 티어별 동적 LOD 제어 |
+| **Backend & DB** | **Spring Boot (또는 NestJS) + PostgreSQL 16 / PostGIS 3.4 + Redis** | - WGS84(`SRID 4326`) 표준 공간 데이터 및 `ST_SimplifyPreserveTopology` 경량 폴리곤 관리<br>- 복합 B-Tree 및 GIN 인덱스를 통한 초고속 조건 집계 |
+
+### **2.2. 모노레포 디렉터리 구조**
+```text
+real-estate-search-platform/
+├── apps/
+│   ├── web/                 # Next.js 웹 및 PWA 진입점
+│   ├── mobile/              # Capacitor (Android / iOS 네이티브 프로젝트)
+│   └── desktop/             # Tauri v2 (Windows / macOS Rust 래퍼)
+├── packages/
+│   ├── core-ui/             # 단일 DOM 기반 반응형 공통 React UI (사이드 패널/바텀 시트 통합)
+│   ├── map-engine/          # MapLibre GL JS + Dynamic Padding·LOD·입력 분기 어댑터
+│   ├── state-store/         # Zustand 상태 관리 (selectedRegionTree, Partial Sync)
+│   └── platform-bridge/     # StorageAdapter, SafeArea, VisualViewport 추상화 인터페이스
+└── backend/                 # Spring Boot / NestJS + PostgreSQL/PostGIS + Redis
+```
+
+---
+
+## **3. 데이터베이스(DB) 설계 및 DDL 스크립트 (PostGIS)**
+
+### **3.1. 설계 핵심 원칙**
+1. **법정동 코드 표준화:** 건축물대장·토지대장·실거래가 데이터와 1:1 매핑을 위해 **10자리 법정동 코드(`bjd_code`)**를 기본 키로 사용합니다. (시도: 앞 2자리, 시군구: 앞 5자리, 읍면동: 앞 8자리)
+2. **좌표계 통일:** 모든 공간 컬럼은 글로벌 웹 지도 표준인 **WGS84 (`SRID 4326`)**로 저장합니다.
+3. **사전 계산 컬럼 활용:** 실시간 뷰포트 정렬(`fitBounds`)을 위한 `bbox`와 실시간 평당 단가 검색을 위한 `price_per_pyeong`을 사전 계산하여 런타임 연산 부하를 제거합니다.
+
+### **3.2. PostgreSQL / PostGIS DDL 스크립트**
+```sql
+CREATE EXTENSION IF NOT EXISTS postgis;
+
+-- 1. 행정구역 코드 및 공간 경계 테이블 (regions)
+CREATE TABLE regions (
+    bjd_code            VARCHAR(10) PRIMARY KEY,            -- 법정동 코드 10자리 (예: '4311110100')
+    region_name         VARCHAR(100) NOT NULL,              -- 행정구역 명칭 (예: '충청북도 청주시 상당구 북문로1가')
+    short_name          VARCHAR(50) NOT NULL,               -- UI 표기용 단축명 (예: '북문로1가', 통합시의 경우 '청주시 상당구')
+    region_depth        SMALLINT NOT NULL,                  -- 계층 깊이 (1: 시도, 2: 시군구, 3: 읍면동)
+    parent_code         VARCHAR(10) REFERENCES regions(bjd_code),
+    center_point        GEOMETRY(Point, 4326) NOT NULL,     -- 라벨 및 초기 포커싱용 중심 좌표
+    bbox                DOUBLE PRECISION[4] NOT NULL,       -- fitBounds 연산용 [minLng, minLat, maxLng, maxLat]
+    boundary_original   GEOMETRY(MultiPolygon, 4326),       -- 원본 정밀 행정구역 경계
+    boundary_simplified GEOMETRY(MultiPolygon, 4326),       -- Douglas-Peucker 단순화 경량 경계 (API 응답용)
+    updated_at          TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_regions_depth_parent ON regions (region_depth, parent_code);
+CREATE INDEX idx_regions_geom_simplified ON regions USING GIST (boundary_simplified);
+
+-- 2. 매물 정보 및 검색 필터 테이블 (properties)
+CREATE TABLE properties (
+    property_id         BIGSERIAL PRIMARY KEY,
+    bjd_code            VARCHAR(10) NOT NULL REFERENCES regions(bjd_code),
+    sido_code           VARCHAR(2) GENERATED ALWAYS AS (SUBSTRING(bjd_code, 1, 2)) STORED,
+    sigungu_code        VARCHAR(5) GENERATED ALWAYS AS (SUBSTRING(bjd_code, 1, 5)) STORED,
+    eupmyeondong_code   VARCHAR(8) GENERATED ALWAYS AS (SUBSTRING(bjd_code, 1, 8)) STORED,
+    
+    -- 면적 및 규모 (㎡ 기준 저장, 프론트엔드에서 평/㎡ 변환)
+    land_area_sqm       NUMERIC(12, 2) NOT NULL DEFAULT 0,
+    building_area_sqm   NUMERIC(12, 2) NOT NULL DEFAULT 0,
+    
+    -- 용도지역 및 건축물 용도 (필지 내 다중 용도지역 수용을 위해 배열 타입 사용)
+    land_use_zones      VARCHAR(20)[] NOT NULL,
+    building_main_use   VARCHAR(20) NOT NULL,
+    
+    -- 거래유형 및 가격 지표
+    trade_type          VARCHAR(10) NOT NULL,               -- 'SALE': 매매, 'JEONSE': 전세, 'MONTHLY': 월세
+    price               BIGINT NOT NULL DEFAULT 0,          -- 매매가 또는 전세/월세 보증금 (만원)
+    monthly_rent        BIGINT NOT NULL DEFAULT 0,          -- 월차임 (만원)
+    price_per_pyeong    BIGINT NOT NULL DEFAULT 0,          -- 평당 단가 (만원, 사전 계산)
+    
+    location            GEOMETRY(Point, 4326) NOT NULL,
+    status              VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+    created_at          TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 실시간 매물 건수 집계(POST /count) 최적화를 위한 복합 인덱스 및 GIN 인덱스
+CREATE INDEX idx_properties_filter_main ON properties (status, trade_type, eupmyeondong_code, price);
+CREATE INDEX idx_properties_area ON properties (land_area_sqm, building_area_sqm);
+CREATE INDEX idx_properties_pyeong ON properties (price_per_pyeong);
+CREATE INDEX idx_properties_zoning_gin ON properties USING GIN (land_use_zones);
+CREATE INDEX idx_properties_bldg_use ON properties (building_main_use);
+CREATE INDEX idx_properties_location ON properties USING GIST (location);
+```
+
+---
+
+## **4. 플랫폼 추상화 및 프론트엔드 상태·렌더링 아키텍처**
+
+### **4.1. 스토리지 추상화 인터페이스 (`StorageAdapter`)**
+iOS Safari의 캐시 삭제 정책(ITP)과 데스크톱 파일 시스템 차이를 단일 인터페이스로 통합하여 행정구역 `TopoJSON` 경계를 영구 캐싱합니다.
+```typescript
+export interface StorageAdapter {
+  getBoundaryCache(key: string): Promise<{ etag: string; topology: unknown } | null>;
+  setBoundaryCache(key: string, etag: string, topology: unknown): Promise<void>;
+  clearExpiredCache(): Promise<void>;
+}
+
+export function createStorageAdapter(): StorageAdapter {
+  if (typeof window !== 'undefined' && '__TAURI__' in window) {
+    return new TauriFileSystemStorage();     // Windows / macOS
+  }
+  if (typeof window !== 'undefined' && 'Capacitor' in window) {
+    return new CapacitorFileSystemStorage(); // Android / iOS
+  }
+  return new IndexedDBStorage();             // Web / PWA
+}
+```
+
+### **4.2. 계층형 상태 구조 (`selectedRegionTree`) 및 부분 동기화 (FR-13)**
+상위 단계(1~2단계)로 복귀하여 지역을 추가·삭제할 때 기존 하위 커스텀 해제 내역이 유실되지 않도록 시군구 코드를 키(Key)로 하는 정규화된 맵 구조로 상태를 관리합니다.
+```typescript
+interface RegionSelectionState {
+  selectedSidoCodes: Set<string>;       // 1단계 선택 시도 코드
+  selectedSigunguCodes: Set<string>;    // 2단계 선택 시군구 코드
+  selectedEmdBySigungu: Record<string, {
+    isAllSelected: boolean;
+    checkedEmdCodes: Set<string>;
+    paletteColor: string;               // 상위 행정구역별 고유 팔레트 색상
+  }>;
+}
+```
+
+### **4.3. 동적 지도 패딩(Dynamic Map Padding) 및 LOD 제어 (FR-12, FR-14)**
+* **Dynamic FitBounds:** 현재 열려 있는 좌측 패널 또는 하단 바텀 시트의 실제 렌더링 픽셀 크기를 `ResizeObserver`로 측정하여 `map.fitBounds(mergedBBox, { padding: currentPanelPadding, duration: 500 })`에 주입합니다.
+* **GPU 티어별 LOD:** 동시 렌더링 폴리곤이 모바일 `150개`, 데스크톱 `500개`를 초과할 경우 WebGL 컨텍스트 손실을 막기 위해 상위 시·군·구 폴리곤 단위로 자동 병합 렌더링합니다.
+
+---
+
+## **5. API 인터페이스 상세 명세**
+
+### **5.1. 시군구 조회 API (`GET /api/v1/regions/sigungu`)**
+* **Request Query:** `sido_codes=43,41`
+* **Response Headers:** `ETag: "sigungu-43-41-v2026"`, `Cache-Control: public, max-age=86400`
+* **Response Body (200 OK):** 시도별 그룹화된 시군구 메타데이터(`bjd_code`, `name`, `center`, `bbox`) 및 경량 `TopoJSON` 반환.
+
+### **5.2. 읍·면·동 조회 API (`GET /api/v1/regions/eupmyeondong`)**
+* **Request Query:** `sigungu_codes=43111,43112`
+* **Response Body (200 OK):** 시군구별 그룹화된 하위 법정 읍·면·동 목록 및 경량 `TopoJSON` 반환.
+
+### **5.3. 실시간 매물 건수 조회 API (`POST /api/v1/properties/count`)**
+* **Request Body:**
+```json
+{
+  "eupmyeondong_codes": ["43111101", "43111102", "43112101"],
+  "trade_type": "SALE",
+  "land_area_sqm": { "min": 330.0, "max": 3300.0 },
+  "building_area_sqm": { "min": null, "max": 1650.0 },
+  "zoning_codes": ["UQA122", "UQA210"],
+  "building_uses": ["04000", "17000"],
+  "price_range": { "min": 50000, "max": 300000 },
+  "monthly_rent_range": null,
+  "pyeong_price_range": { "min": 500, "max": 2000 }
+}
+```
+* **Response Body (200 OK):** `{ "total_count": 142, "clusters": [ { "bjd_code": "43111101", "count": 58 }, ... ] }`
+
+---
+
+## **6. 성능 최적화 및 예외 처리 전략**
+1. **슬라이더 조작 및 레이스 컨디션 방지:** 슬라이더 드래그 완료 시점(`onChangeCommitted`)에 **300ms 디바운싱**을 적용하며, 이전 요청이 완료되기 전 새 요청 발생 시 `AbortController`로 이전 HTTP 요청을 즉시 취소합니다.
+2. **Redis 캐시 폭발 방지:** 상세 필터 조합 전체를 Redis에 캐싱하지 않고 **지역 + 거래유형 단위 기본 카운트**만 캐싱하며, 복합 조건은 PostgreSQL의 커버링 인덱스(`idx_properties_filter_main`)로 직접 집계합니다.
