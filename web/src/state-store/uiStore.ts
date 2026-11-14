@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { RegionFeature } from "../api/regions";
 
-interface UiStore {
+export interface UiStore {
   toast: { id: number; text: string } | null;
   showToast(text: string): void;
   drawerOpen: boolean;
@@ -19,10 +19,36 @@ interface UiStore {
 
 let toastId = 0;
 
+/** DRD 3.1 — 태블릿(768px ~ 1023px) 세로 모드 진입 여부 판별 */
+function isInitialTabletPortrait(): boolean {
+  if (typeof window === "undefined") return false;
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  return w >= 768 && w < 1024 && h > w;
+}
+
+function getInitialMapPadding(drawerOpen: boolean) {
+  if (typeof window === "undefined") {
+    return { top: 40, right: 40, bottom: 40, left: 420 };
+  }
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  if (w >= 1024) {
+    return { top: 40, right: 40, bottom: 40, left: 420 };
+  }
+  if (w >= 768) {
+    return { top: 40, right: 40, bottom: 40, left: drawerOpen ? 380 : 40 };
+  }
+  return { top: 20, right: 20, bottom: Math.round(h * 0.5) + 20, left: 20 };
+}
+
+const initialDrawerOpen = !isInitialTabletPortrait();
+
 export const useUiStore = create<UiStore>((set) => ({
   toast: null,
   showToast: (text) => set({ toast: { id: ++toastId, text } }),
-  drawerOpen: true,
+  // DRD 3.1: 태블릿 세로 모드 진입 시 지도 가시성 확보를 위해 기본 접힘(false) 상태
+  drawerOpen: initialDrawerOpen,
   setDrawerOpen: (drawerOpen) => set({ drawerOpen }),
   sheetSnap: 1,
   setSheetSnap: (sheetSnap) => set({ sheetSnap }),
@@ -30,6 +56,6 @@ export const useUiStore = create<UiStore>((set) => ({
   setResultsOpen: (resultsOpen) => set({ resultsOpen }),
   miniCard: null,
   setMiniCard: (miniCard) => set({ miniCard }),
-  mapPadding: { top: 40, right: 40, bottom: 40, left: 420 },
+  mapPadding: getInitialMapPadding(initialDrawerOpen),
   setMapPadding: (mapPadding) => set({ mapPadding }),
 }));

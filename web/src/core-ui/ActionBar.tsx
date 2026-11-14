@@ -1,10 +1,14 @@
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { postCount } from "../api/mockServer";
-import { buildCountRequest, useCountStore, useFilterStore } from "../state-store/filterStore";
+import {
+  buildCountRequest,
+  useCountStore,
+  useFilterStore,
+} from "../state-store/filterStore";
 import { buildRegionQuery, useRegionStore } from "../state-store/regionStore";
 import { useUiStore } from "../state-store/uiStore";
 
-/** 카운트업 애니메이션 숫자 */
+/** 카운트업 애니메이션 숫자 (DRD 4.4) */
 function useCountUp(target: number, ms = 450) {
   const [v, setV] = useState(target);
   const from = useRef(target);
@@ -32,12 +36,22 @@ export function useLiveCount() {
   const filters = useFilterStore();
   const setCount = useCountStore((s) => s.set);
   const q = buildRegionQuery(region);
+
+  // 선택된 시·군·구가 있을 때 모든 시·군·구의 하위 읍·면·동이 해제된 경우 판별
+  const allSigunguEmdCleared =
+    region.selectedSigunguCodes.length > 0 &&
+    region.selectedSigunguCodes.every((sg) => {
+      const e = region.selectedEmdBySigungu[sg];
+      return e != null && !e.isAllSelected && e.checkedEmdCodes.length === 0;
+    });
+
+  const isEmptySelection = q.empty || (region.step === 3 && allSigunguEmdCleared);
   const req = buildCountRequest(q, filters);
-  const key = JSON.stringify(req);
+  const key = JSON.stringify({ ...req, isEmptySelection });
   const ctrl = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    if (q.none || q.empty) {
+    if (q.none || isEmptySelection) {
       ctrl.current?.abort();
       setCount({ status: "idle", data: null });
       return;
@@ -58,7 +72,7 @@ export function useLiveCount() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
 
-  return q;
+  return { ...q, empty: isEmptySelection };
 }
 
 export function ActionBar({ onSearch }: { onSearch: () => void }) {
@@ -70,9 +84,11 @@ export function ActionBar({ onSearch }: { onSearch: () => void }) {
   const n = useCountUp(data?.total_count ?? 0);
   const wasEmpty = useRef(false);
 
-  // FR 5 — 전체 해제 예외: 토스트 안내 (상태 진입 시 1회)
+  // FRD 5 & DRD 4.4 — 읍·면·동 전체 해제 예외: 경고 토스트 안내 (상태 진입 시 1회)
   useEffect(() => {
-    if (q.empty && !wasEmpty.current) showToast("최소 1개 이상의 읍·면·동을 선택해주세요");
+    if (q.empty && !wasEmpty.current) {
+      showToast("최소 1개 이상의 읍·면·동을 선택해주세요");
+    }
     wasEmpty.current = q.empty;
   }, [q.empty, showToast]);
 
@@ -80,6 +96,7 @@ export function ActionBar({ onSearch }: { onSearch: () => void }) {
   let disabled = false;
   let action = onSearch;
   let tone = "primary";
+
   if (q.none) {
     label = "지역을 먼저 선택해주세요";
     disabled = true;
@@ -99,18 +116,35 @@ export function ActionBar({ onSearch }: { onSearch: () => void }) {
     label = (
       <>
         <span className="tnum">{n.toLocaleString()}</span>개 매물 보기
-        {status === "loading" && <span className="spinner" aria-label="집계 중" />}
+        {status === "loading" && (
+          <span className="spinner" aria-label="집계 중" />
+        )}
       </>
     );
   }
 
   return (
     <div className="action-bar">
-      <button type="button" className="btn-reset" aria-label="전체 초기화" title="전체 초기화 (Esc)"
-        onClick={() => { resetRegion(); resetFilters(); showToast("검색 조건을 모두 초기화했습니다"); }}>
+      <button
+        type="button"
+        className="btn-reset"
+        aria-label="전체 초기화"
+        title="전체 초기화 (Esc)"
+        onClick={() => {
+          resetRegion();
+          resetFilters();
+          showToast("검색 조건을 모두 초기화했습니다");
+        }}
+      >
         ↺
       </button>
-      <button type="button" className={`btn-main tone-${tone}`} disabled={disabled} onClick={action} title="매물 조회 (Enter)">
+      <button
+        type="button"
+        className={`btn-main tnum tone-${tone}`}
+        disabled={disabled}
+        onClick={action}
+        title="매물 조회 (Enter)"
+      >
         {label}
       </button>
     </div>

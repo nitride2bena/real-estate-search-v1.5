@@ -33,7 +33,7 @@ export const initialFilters: FilterState = {
   buildingUses: [],
 };
 
-interface FilterStore extends FilterState {
+export interface FilterStore extends FilterState {
   set<K extends keyof FilterState>(key: K, value: FilterState[K]): void;
   setTradeType(t: TradeType): void;
   toggleZone(code: string): void;
@@ -61,8 +61,31 @@ export const useFilterStore = create<FilterStore>((set, get) => ({
     const u = get().buildingUses;
     set({ buildingUses: u.includes(code) ? u.filter((c) => c !== code) : [...u, code] });
   },
-  reset: () => set({ ...initialFilters, landUnit: get().landUnit, buildingUnit: get().buildingUnit }),
-  restore: (f) => set({ ...initialFilters, ...f }),
+  reset: () =>
+    set({
+      ...initialFilters,
+      price: anyRange(),
+      rent: anyRange(),
+      pyeongPrice: anyRange(),
+      landArea: anyRange(),
+      buildingArea: anyRange(),
+      zoning: [],
+      buildingUses: [],
+      landUnit: get().landUnit,
+      buildingUnit: get().buildingUnit,
+    }),
+  restore: (f) =>
+    set({
+      ...initialFilters,
+      ...f,
+      price: f.price ? { ...f.price } : anyRange(),
+      rent: f.rent ? { ...f.rent } : anyRange(),
+      pyeongPrice: f.pyeongPrice ? { ...f.pyeongPrice } : anyRange(),
+      landArea: f.landArea ? { ...f.landArea } : anyRange(),
+      buildingArea: f.buildingArea ? { ...f.buildingArea } : anyRange(),
+      zoning: f.zoning ? [...f.zoning] : [],
+      buildingUses: f.buildingUses ? [...f.buildingUses] : [],
+    }),
 }));
 
 const isSet = (r: Range) => r.min != null || r.max != null;
@@ -97,7 +120,7 @@ export function buildCountRequest(r: RegionQuery, f: FilterState): CountRequest 
 }
 
 // ---------- 실시간 매물 건수 상태 ----------
-interface CountStore {
+export interface CountStore {
   status: "idle" | "loading" | "ready" | "error";
   data: CountResponse | null;
   set(p: Partial<Pick<CountStore, "status" | "data">>): void;

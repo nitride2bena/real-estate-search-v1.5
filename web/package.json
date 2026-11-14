@@ -23,6 +23,7 @@
     "@types/topojson-client": "^3.1.5",
     "@types/topojson-specification": "^1.0.5",
     "@vitejs/plugin-react": "^4.5.0",
+    "gh-pages": "^6.3.0",
     "mapshaper": "^0.6.102",
     "typescript": "~5.8.3",
     "vite": "^6.3.5"

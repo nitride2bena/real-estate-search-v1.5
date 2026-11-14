@@ -78,22 +78,26 @@ function pick<T>(r: () => number, arr: readonly T[], weights?: number[]): T {
 const METRO = new Set(["11", "26", "27", "28", "30", "31"]);
 const zoneByGroup = Object.fromEntries(ZONING.map((g) => [g.key, g.items.map((i) => i.code)]));
 
-let nextId = 1;
 const bySido = new Map<string, Promise<Property[]>>();
 
 function generateForEmd(code: string, name: string, sigunguName: string): Property[] {
-  const r = rng(hash(code));
+  const seed = hash(code);
+  const r = rng(seed);
   const sido = code.slice(0, 2);
   const metro = METRO.has(sido);
   const n = Math.floor(r() * (metro ? 40 : 28)) + (metro ? 8 : 2);
   const out: Property[] = [];
   const priceLevel = metro ? 2.2 + r() * 2.5 : 0.25 + r() * 1.2; // 평당 천만원 단위 지수
+  const baseId = (Number(code) || (seed % 90_000_000)) * 100;
   for (let i = 0; i < n; i++) {
     const groupKey = metro
       ? pick(r, ["R", "C", "I", "G"], [62, 22, 8, 8])
       : pick(r, ["R", "C", "I", "G", "M", "A", "N"], [20, 6, 6, 14, 30, 18, 6]);
     const zones = [pick(r, zoneByGroup[groupKey])];
-    if (r() < 0.12) zones.push(pick(r, zoneByGroup[pick(r, ["R", "G", "M"])]));
+    if (r() < 0.12) {
+      const extra = pick(r, zoneByGroup[pick(r, ["R", "G", "M"])]);
+      if (!zones.includes(extra)) zones.push(extra);
+    }
 
     const rural = ["M", "A", "N", "G"].includes(groupKey);
     const land = Math.round(Math.exp((rural ? 6.3 : 5.0) + r() * (rural ? 2.4 : 1.8)));
@@ -121,7 +125,7 @@ function generateForEmd(code: string, name: string, sigunguName: string): Proper
       rent = Math.max(10, Math.round((sale * (0.0025 + r() * 0.002)) / 5) * 5);
     }
     out.push({
-      property_id: nextId++,
+      property_id: baseId + i + 1,
       bjd_code: code,
       emd_name: name,
       address: `${sigunguName} ${name} ${Math.floor(r() * 900) + 1}${r() < 0.6 ? `-${Math.floor(r() * 30) + 1}` : ""}`,

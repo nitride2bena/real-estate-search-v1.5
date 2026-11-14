@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { PALETTE } from "../domain/constants";
 import { emdCodesOf, useGeoStore } from "./geoStore";
+import { serializeSearchUrl, hydrateFromUrl, shareSearchUrl } from "../platform-bridge/viewport";
 
 export type Step = 1 | 2 | 3;
 export type Tab = "region" | "filter";
@@ -21,7 +22,7 @@ export interface RegionSelectionState {
   sidoColor: Record<string, string>;
 }
 
-interface RegionStore extends RegionSelectionState {
+export interface RegionStore extends RegionSelectionState {
   tab: Tab;
   step: Step;
   setTab(t: Tab): void;
@@ -34,10 +35,10 @@ interface RegionStore extends RegionSelectionState {
   toggleEmd(sigungu: string, emd: string): void;
   setEmdGroup(sigungu: string, on: boolean): void;
   resetAll(): void;
-  restore(state: RegionSelectionState): void;
+  restore(state: Partial<RegionSelectionState> & { step?: Step; tab?: Tab }): void;
 }
 
-function nextColor(used: string[]): string {
+export function nextPaletteColor(used: string[]): string {
   const free = PALETTE.find((c) => !used.includes(c));
   return free ?? PALETTE[used.length % PALETTE.length];
 }
@@ -55,14 +56,40 @@ export const useRegionStore = create<RegionStore>((set, get) => ({
   step: 1,
 
   setTab: (tab) => set({ tab }),
-  setStep: (step) => set({ step, tab: "region" }),
+
+  setStep: (step) => {
+    const s = get();
+    // 3단계 진입 시 선택된 시군구 중 selectedEmdBySigungu 엔트리가 없는 항목만 기본 전체 선택으로 보충 (Partial Sync 보존)
+    const emd = { ...s.selectedEmdBySigungu };
+    let emdUpdated = false;
+    for (const sg of s.selectedSigunguCodes) {
+      if (!emd[sg]) {
+        const used = Object.values(emd).map((e) => e.paletteColor);
+        emd[sg] = { isAllSelected: true, checkedEmdCodes: [], paletteColor: nextPaletteColor(used) };
+        emdUpdated = true;
+      }
+    }
+    set(emdUpdated ? { step, tab: "region", selectedEmdBySigungu: emd } : { step, tab: "region" });
+
+    // 단계 이동 시 필요한 하위 행정구역 경계 데이터 보장
+    if (step >= 2 && s.selectedSidoCodes.length) {
+      void useGeoStore.getState().ensureSigungu(s.selectedSidoCodes);
+    }
+    if (step === 3 && s.selectedSigunguCodes.length) {
+      const sidos = [...new Set(s.selectedSigunguCodes.map((c) => c.slice(0, 2)))];
+      void useGeoStore.getState().ensureEmd(sidos);
+    }
+  },
 
   toggleSido: (code) => {
     const s = get();
     if (s.selectedSidoCodes.includes(code)) {
+      // FR-13: 해제된 시·도에 속한 하위 시군구/읍면동만 제거하고, 다른 시·도의 하위 커스텀 선택은 유지
       const sgg = s.selectedSigunguCodes.filter((c) => !c.startsWith(code));
       const emd = { ...s.selectedEmdBySigungu };
-      for (const k of Object.keys(emd)) if (k.startsWith(code)) delete emd[k];
+      for (const k of Object.keys(emd)) {
+        if (k.startsWith(code)) delete emd[k];
+      }
       const colors = { ...s.sidoColor };
       delete colors[code];
       set({
@@ -74,7 +101,7 @@ export const useRegionStore = create<RegionStore>((set, get) => ({
     } else {
       set({
         selectedSidoCodes: [...s.selectedSidoCodes, code],
-        sidoColor: { ...s.sidoColor, [code]: nextColor(Object.values(s.sidoColor)) },
+        sidoColor: { ...s.sidoColor, [code]: nextPaletteColor(Object.values(s.sidoColor)) },
       });
       void useGeoStore.getState().ensureSigungu([code]);
     }
@@ -86,7 +113,7 @@ export const useRegionStore = create<RegionStore>((set, get) => ({
     const colors = { ...s.sidoColor };
     const order = [...s.selectedSidoCodes];
     for (const c of all) {
-      if (!colors[c]) colors[c] = nextColor(Object.values(colors));
+      if (!colors[c]) colors[c] = nextPaletteColor(Object.values(colors));
       if (!order.includes(c)) order.push(c);
     }
     set({ selectedSidoCodes: order, sidoColor: colors });
@@ -98,20 +125,41 @@ export const useRegionStore = create<RegionStore>((set, get) => ({
   toggleSigungu: (code) => {
     const s = get();
     if (s.selectedSigunguCodes.includes(code)) {
+      const curEmd = s.selectedEmdBySigungu[code];
+      // 3단계에서 모든 동이 해제된(0개) 상태였던 시군구를 2단계에서 다시 클릭하면 전체 선택으로 복원
+      if (curEmd && !curEmd.isAllSelected && curEmd.checkedEmdCodes.length === 0) {
+        set({
+          selectedEmdBySigungu: {
+            ...s.selectedEmdBySigungu,
+            [code]: { ...curEmd, isAllSelected: true, checkedEmdCodes: [] },
+          },
+        });
+        return;
+      }
       const emd = { ...s.selectedEmdBySigungu };
       delete emd[code];
-      set({ selectedSigunguCodes: s.selectedSigunguCodes.filter((c) => c !== code), selectedEmdBySigungu: emd });
+      set({
+        selectedSigunguCodes: s.selectedSigunguCodes.filter((c) => c !== code),
+        selectedEmdBySigungu: emd,
+      });
     } else {
-      // FR-03 / FR-13 — 새로 추가된 시군구만 전체 선택 상태로 병합
+      // FR-03 & FR-13 — 기존 시군구의 하위 커스텀 선택 상태는 그대로 유지(Partial Sync)하고 새로 추가된 시군구만 전체 선택 상태로 병합
+      const sido = code.slice(0, 2);
+      const sidoCodes = s.selectedSidoCodes.includes(sido) ? s.selectedSidoCodes : [...s.selectedSidoCodes, sido];
+      const sidoColor = s.sidoColor[sido]
+        ? s.sidoColor
+        : { ...s.sidoColor, [sido]: nextPaletteColor(Object.values(s.sidoColor)) };
       const used = Object.values(s.selectedEmdBySigungu).map((e) => e.paletteColor);
       set({
+        selectedSidoCodes: sidoCodes,
+        sidoColor,
         selectedSigunguCodes: [...s.selectedSigunguCodes, code],
         selectedEmdBySigungu: {
           ...s.selectedEmdBySigungu,
-          [code]: { isAllSelected: true, checkedEmdCodes: [], paletteColor: nextColor(used) },
+          [code]: { isAllSelected: true, checkedEmdCodes: [], paletteColor: nextPaletteColor(used) },
         },
       });
-      void useGeoStore.getState().ensureEmd([code.slice(0, 2)]);
+      void useGeoStore.getState().ensureEmd([sido]);
     }
   },
 
@@ -122,12 +170,18 @@ export const useRegionStore = create<RegionStore>((set, get) => ({
       const sgg = [...s.selectedSigunguCodes];
       const emd = { ...s.selectedEmdBySigungu };
       for (const c of list) {
-        if (sgg.includes(c)) continue;
+        if (sgg.includes(c)) {
+          // FR-13: 이미 선택되어 있던 시군구 중 커스텀 부분 선택(mixed) 상태는 보존하되, 0개 선택 상태였다면 전체 선택으로 복구
+          if (emd[c] && !emd[c].isAllSelected && emd[c].checkedEmdCodes.length === 0) {
+            emd[c] = { ...emd[c], isAllSelected: true, checkedEmdCodes: [] };
+          }
+          continue;
+        }
         sgg.push(c);
         emd[c] = {
           isAllSelected: true,
           checkedEmdCodes: [],
-          paletteColor: nextColor(Object.values(emd).map((e) => e.paletteColor)),
+          paletteColor: nextPaletteColor(Object.values(emd).map((e) => e.paletteColor)),
         };
       }
       set({ selectedSigunguCodes: sgg, selectedEmdBySigungu: emd });
@@ -135,7 +189,13 @@ export const useRegionStore = create<RegionStore>((set, get) => ({
     } else {
       const emd = { ...s.selectedEmdBySigungu };
       for (const c of list) delete emd[c];
-      set({ selectedSigunguCodes: s.selectedSigunguCodes.filter((c) => !c.startsWith(sido)), selectedEmdBySigungu: emd });
+      for (const k of Object.keys(emd)) {
+        if (k.startsWith(sido)) delete emd[k];
+      }
+      set({
+        selectedSigunguCodes: s.selectedSigunguCodes.filter((c) => !c.startsWith(sido)),
+        selectedEmdBySigungu: emd,
+      });
     }
   },
 
@@ -143,11 +203,12 @@ export const useRegionStore = create<RegionStore>((set, get) => ({
     const s = get();
     const cur = s.selectedEmdBySigungu[sigungu];
     const all = emdCodesOf(sigungu);
-    if (!cur || !all) return;
-    const checked = cur.isAllSelected ? [...all] : [...cur.checkedEmdCodes];
-    const i = checked.indexOf(emd);
-    if (i >= 0) checked.splice(i, 1);
-    else checked.push(emd);
+    if (!cur || !all || !all.length) return;
+    const base = cur.isAllSelected ? [...all] : [...cur.checkedEmdCodes];
+    const setCodes = new Set(base);
+    if (setCodes.has(emd)) setCodes.delete(emd);
+    else setCodes.add(emd);
+    const checked = all.filter((code) => setCodes.has(code));
     const isAll = checked.length === all.length;
     set({
       selectedEmdBySigungu: {
@@ -172,11 +233,46 @@ export const useRegionStore = create<RegionStore>((set, get) => ({
   resetAll: () => set({ ...empty, step: 1 }),
 
   restore: (state) => {
-    set({ ...state });
+    const cur = get();
+    const selectedSidoCodes = [...new Set(state.selectedSidoCodes ?? cur.selectedSidoCodes)];
+    const selectedSigunguCodes = [...new Set(state.selectedSigunguCodes ?? cur.selectedSigunguCodes)];
+
+    // 상위 시도 코드가 누락된 시군구가 있으면 자동으로 시도 코드 보충
+    for (const sg of selectedSigunguCodes) {
+      const sd = sg.slice(0, 2);
+      if (sd && !selectedSidoCodes.includes(sd)) selectedSidoCodes.push(sd);
+    }
+
+    const sidoColor: Record<string, string> = { ...(state.sidoColor ?? {}) };
+    for (const sd of selectedSidoCodes) {
+      if (!sidoColor[sd]) sidoColor[sd] = nextPaletteColor(Object.values(sidoColor));
+    }
+
+    const selectedEmdBySigungu: Record<string, EmdSelection> = {};
+    const rawEmd = state.selectedEmdBySigungu ?? {};
+    for (const sg of selectedSigunguCodes) {
+      const existing = rawEmd[sg];
+      const used = Object.values(selectedEmdBySigungu).map((e) => e.paletteColor);
+      selectedEmdBySigungu[sg] = {
+        isAllSelected: existing ? existing.isAllSelected : true,
+        checkedEmdCodes: existing ? [...existing.checkedEmdCodes] : [],
+        paletteColor: existing?.paletteColor || nextPaletteColor(used),
+      };
+    }
+
+    set({
+      selectedSidoCodes,
+      selectedSigunguCodes,
+      selectedEmdBySigungu,
+      sidoColor,
+      ...(state.step ? { step: state.step } : {}),
+      ...(state.tab ? { tab: state.tab } : {}),
+    });
+
     const geo = useGeoStore.getState();
-    void geo.ensureSigungu(state.selectedSidoCodes);
-    const sidos = [...new Set(state.selectedSigunguCodes.map((c) => c.slice(0, 2)))];
-    if (sidos.length) void geo.ensureEmd(sidos);
+    if (selectedSidoCodes.length) void geo.ensureSigungu(selectedSidoCodes);
+    const sidosForEmd = [...new Set(selectedSigunguCodes.map((c) => c.slice(0, 2)))];
+    if (sidosForEmd.length) void geo.ensureEmd(sidosForEmd);
   },
 }));
 
@@ -187,6 +283,8 @@ export function sigunguState(s: RegionSelectionState, code: string): "on" | "mix
   if (!s.selectedSigunguCodes.includes(code)) return "off";
   const e = s.selectedEmdBySigungu[code];
   if (!e || e.isAllSelected) return "on";
+  const total = emdCodesOf(code)?.length;
+  if (total != null && total > 0 && e.checkedEmdCodes.length >= total) return "on";
   return "mixed";
 }
 
@@ -196,10 +294,11 @@ export function isEmdChecked(s: RegionSelectionState, sigungu: string, emd: stri
   return e.isAllSelected || e.checkedEmdCodes.includes(emd);
 }
 
-export function checkedEmdCount(s: RegionSelectionState, sigungu: string, total: number): number {
+export function checkedEmdCount(s: RegionSelectionState, sigungu: string, total?: number): number {
   const e = s.selectedEmdBySigungu[sigungu];
   if (!e) return 0;
-  return e.isAllSelected ? total : e.checkedEmdCodes.length;
+  const resolvedTotal = total ?? emdCodesOf(sigungu)?.length ?? 0;
+  return e.isAllSelected ? resolvedTotal : e.checkedEmdCodes.length;
 }
 
 export interface RegionQuery {
@@ -230,3 +329,6 @@ export function buildRegionQuery(s: RegionSelectionState): RegionQuery {
   q.empty = !q.none && !q.sido_codes.length && !q.sigungu_codes.length && !q.eupmyeondong_codes.length;
   return q;
 }
+
+// FR-17 URL 직렬화·복원·공유 헬퍼 Re-export (regionStore 또는 viewport 어디서든 import 가능)
+export { serializeSearchUrl, hydrateFromUrl, shareSearchUrl };

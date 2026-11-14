@@ -1,6 +1,6 @@
 // 행정구역 조회 API 클라이언트
 // 실제 백엔드의 GET /api/v1/regions/sigungu?sido_codes=.. , /eupmyeondong?sigungu_codes=.. 를
-// 정적 TopoJSON(시도별 분할) + ETag 영구 캐싱(StorageAdapter)으로 흉내냅니다.
+// 정적 TopoJSON(시도별 분할) + ETag 영구 캐싱(StorageAdapter)으로 재현합니다.
 import { feature } from "topojson-client";
 import type { Topology, GeometryObject } from "topojson-specification";
 import type { Feature, MultiPolygon, Polygon } from "geojson";
@@ -21,8 +21,14 @@ export type RegionFeature = Feature<Polygon | MultiPolygon, RegionProps>;
 const DATA_VERSION = "v20261001";
 const BASE = `${import.meta.env.BASE_URL}data`;
 
-async function loadTopology(path: string, signal?: AbortSignal): Promise<RegionFeature[]> {
+// 동일 세션 내 중복 TopoJSON 파싱 방지용 메모리 캐시
+const featureCache = new Map<string, RegionFeature[]>();
+
+export async function loadTopology(path: string, signal?: AbortSignal): Promise<RegionFeature[]> {
   const key = `${DATA_VERSION}:${path}`;
+  const inMem = featureCache.get(key);
+  if (inMem && !signal?.aborted) return inMem;
+
   const cached = await storage.getBoundaryCache(key);
   const headers: HeadersInit = cached ? { "If-None-Match": cached.etag } : {};
   let topo: Topology;
@@ -31,8 +37,13 @@ async function loadTopology(path: string, signal?: AbortSignal): Promise<RegionF
     if (res.status === 304 && cached) {
       topo = cached.topology as Topology;
     } else if (res.ok) {
-      topo = (await res.json()) as Topology;
-      await storage.setBoundaryCache(key, res.headers.get("ETag") ?? `"${key}"`, topo);
+      const serverEtag = res.headers.get("ETag") ?? `"${key}"`;
+      if (cached && cached.etag === serverEtag && cached.topology) {
+        topo = cached.topology as Topology;
+      } else {
+        topo = (await res.json()) as Topology;
+        await storage.setBoundaryCache(key, serverEtag, topo);
+      }
     } else if (cached) {
       topo = cached.topology as Topology;
     } else {
@@ -40,13 +51,15 @@ async function loadTopology(path: string, signal?: AbortSignal): Promise<RegionF
     }
   } catch (e) {
     if ((e as Error).name === "AbortError" || !cached) throw e;
-    topo = cached.topology as Topology; // 오프라인 시 캐시 사용
+    topo = cached.topology as Topology; // 오프라인 시 로컬 영구 캐시 사용
   }
   const objectName = Object.keys(topo.objects)[0];
   const fc = feature(topo, topo.objects[objectName] as GeometryObject) as unknown as {
     features: RegionFeature[];
   };
-  return fc.features.sort((a, b) => a.properties.code.localeCompare(b.properties.code));
+  const sorted = fc.features.sort((a, b) => a.properties.code.localeCompare(b.properties.code));
+  featureCache.set(key, sorted);
+  return sorted;
 }
 
 export function fetchSido(signal?: AbortSignal) {
@@ -68,5 +81,3 @@ export async function fetchEmdBySido(sidoCodes: string[], signal?: AbortSignal) 
   );
   return groups;
 }
-
-export { loadTopology };

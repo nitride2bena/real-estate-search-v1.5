@@ -1,61 +1,144 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { postSearch, type Property } from "../api/mockServer";
-import { BUILDING_USE_LABEL, SQM_PER_PYEONG, ZONE_LABEL, formatMoney } from "../domain/constants";
+import {
+  BUILDING_USE_LABEL,
+  SQM_PER_PYEONG,
+  ZONE_LABEL,
+  formatMoney,
+} from "../domain/constants";
 import { buildCountRequest, useFilterStore } from "../state-store/filterStore";
 import { buildRegionQuery, useRegionStore } from "../state-store/regionStore";
 import { useUiStore } from "../state-store/uiStore";
 
 const TRADE_LABEL = { SALE: "매매", JEONSE: "전세", MONTHLY: "월세" } as const;
+type SortKey = "ppp_asc" | "price_asc" | "area_desc";
 
 export function ResultsModal() {
   const open = useUiStore((s) => s.resultsOpen);
   const setOpen = useUiStore((s) => s.setResultsOpen);
-  const [data, setData] = useState<{ total_count: number; items: Property[] } | null>(null);
+  const [data, setData] = useState<{
+    total_count: number;
+    items: Property[];
+  } | null>(null);
+  const [sortBy, setSortBy] = useState<SortKey>("ppp_asc");
 
   useEffect(() => {
     if (!open) return;
     setData(null);
     const c = new AbortController();
-    const req = buildCountRequest(buildRegionQuery(useRegionStore.getState()), useFilterStore.getState());
-    postSearch(req, 100, c.signal).then(setData).catch(() => {});
+    const req = buildCountRequest(
+      buildRegionQuery(useRegionStore.getState()),
+      useFilterStore.getState(),
+    );
+    postSearch(req, 100, c.signal)
+      .then(setData)
+      .catch(() => {});
     return () => c.abort();
   }, [open]);
 
+  const sortedItems = useMemo(() => {
+    if (!data?.items) return [];
+    const copy = [...data.items];
+    if (sortBy === "price_asc") {
+      copy.sort((a, b) => a.price - b.price);
+    } else if (sortBy === "area_desc") {
+      copy.sort((a, b) => b.land_area_sqm - a.land_area_sqm);
+    } else {
+      copy.sort((a, b) => a.price_per_pyeong - b.price_per_pyeong);
+    }
+    return copy;
+  }, [data, sortBy]);
+
   if (!open) return null;
+
   return (
     <div className="modal-backdrop" onClick={() => setOpen(false)}>
-      <div className="modal" role="dialog" aria-modal="true" aria-label="검색 결과" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="검색 결과"
+        onClick={(e) => e.stopPropagation()}
+      >
         <header className="modal-head">
           <div>
             <h2>검색 결과</h2>
-            <p className="tnum">{data ? `총 ${data.total_count.toLocaleString()}건 · 평당가 낮은 순 상위 ${data.items.length}건` : "불러오는 중…"}</p>
+            <p className="tnum">
+              {data
+                ? `총 ${data.total_count.toLocaleString()}건 · 상위 ${data.items.length}건 표시`
+                : "불러오는 중…"}
+            </p>
           </div>
-          <button type="button" className="btn-icon" aria-label="닫기" onClick={() => setOpen(false)}>✕</button>
+          <div className="modal-head-actions">
+            <select
+              className="modal-sort-select"
+              aria-label="정렬 기준"
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as SortKey)}
+            >
+              <option value="ppp_asc">평당가 낮은 순</option>
+              <option value="price_asc">가격 낮은 순</option>
+              <option value="area_desc">대지면적 넓은 순</option>
+            </select>
+            <button
+              type="button"
+              className="btn-icon"
+              aria-label="닫기"
+              onClick={() => setOpen(false)}
+            >
+              ✕
+            </button>
+          </div>
         </header>
+
         <ul className="result-list">
-          {!data && Array.from({ length: 6 }, (_, i) => <li key={i} className="skeleton result-skel" />)}
-          {data?.items.map((p) => (
+          {!data &&
+            Array.from({ length: 6 }, (_, i) => (
+              <li key={i} className="skeleton result-skel" />
+            ))}
+          {data && sortedItems.length === 0 && (
+            <li className="empty-filter-msg">
+              조건에 맞는 매물이 없습니다.
+            </li>
+          )}
+          {sortedItems.map((p) => (
             <li key={p.property_id} className="result-card">
               <div className="result-top">
-                <span className={`trade trade-${p.trade_type}`}>{TRADE_LABEL[p.trade_type]}</span>
+                <span className={`trade trade-${p.trade_type}`}>
+                  {TRADE_LABEL[p.trade_type]}
+                </span>
                 <strong className="tnum">
-                  {p.trade_type === "MONTHLY" ? `${formatMoney(p.price)} / ${formatMoney(p.monthly_rent)}` : formatMoney(p.price)}
+                  {p.trade_type === "MONTHLY"
+                    ? `${formatMoney(p.price)} / 월 ${formatMoney(p.monthly_rent)}`
+                    : formatMoney(p.price)}
                 </strong>
-                <span className="result-ppp tnum">평당 {formatMoney(p.price_per_pyeong)}</span>
+                <span className="result-ppp tnum">
+                  평당 {formatMoney(p.price_per_pyeong)}
+                </span>
               </div>
               <div className="result-addr">{p.address}</div>
               <div className="result-meta tnum">
-                대지 {Math.round(p.land_area_sqm).toLocaleString()}㎡ ({Math.round(p.land_area_sqm / SQM_PER_PYEONG).toLocaleString()}평)
-                {p.building_area_sqm > 0 && ` · 연면적 ${Math.round(p.building_area_sqm).toLocaleString()}㎡`}
-                {` · ${BUILDING_USE_LABEL[p.building_main_use]}`}
+                대지 {Math.round(p.land_area_sqm).toLocaleString()}㎡ (
+                {Math.round(p.land_area_sqm / SQM_PER_PYEONG).toLocaleString()}
+                평)
+                {p.building_area_sqm > 0 &&
+                  ` · 연면적 ${Math.round(p.building_area_sqm).toLocaleString()}㎡ (${Math.round(p.building_area_sqm / SQM_PER_PYEONG).toLocaleString()}평)`}
+                {` · ${BUILDING_USE_LABEL[p.building_main_use] ?? p.building_main_use}`}
               </div>
               <div className="result-tags">
-                {p.land_use_zones.map((z) => <span key={z} className="tag">{ZONE_LABEL[z]}</span>)}
+                {p.land_use_zones.map((z) => (
+                  <span key={z} className="tag">
+                    {ZONE_LABEL[z] ?? z}
+                  </span>
+                ))}
               </div>
             </li>
           ))}
         </ul>
-        <p className="modal-foot">※ 프로토타입용 가상 매물 데이터입니다.</p>
+
+        <p className="modal-foot">
+          ※ 프로토타입용 가상 매물 데이터입니다. (법정동 10자리 표준 코드 기반)
+        </p>
       </div>
     </div>
   );

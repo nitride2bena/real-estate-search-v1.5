@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { fetchEmdBySido, fetchSido, fetchSigungu, type RegionFeature } from "../api/regions";
 
-interface GeoState {
+export interface GeoState {
   sido: RegionFeature[];
   sigunguBySido: Record<string, RegionFeature[]>;
   emdBySigungu: Record<string, RegionFeature[]>;
@@ -28,13 +28,13 @@ function once(key: string, fn: () => Promise<void>) {
 
 export const useGeoStore = create<GeoState>((set, get) => {
   const track = async (fn: () => Promise<void>) => {
-    set((s) => ({ pending: s.pending + 1 }));
+    set((s) => ({ pending: s.pending + 1, error: null }));
     try {
       await fn();
     } catch (e) {
       set({ error: (e as Error).message });
     } finally {
-      set((s) => ({ pending: s.pending - 1 }));
+      set((s) => ({ pending: Math.max(0, s.pending - 1) }));
     }
   };
 
@@ -59,7 +59,8 @@ export const useGeoStore = create<GeoState>((set, get) => {
       ),
 
     ensureSigungu: async (sidoCodes) => {
-      const missing = sidoCodes.filter((c) => !get().sigunguBySido[c]);
+      const missing = [...new Set(sidoCodes)].filter((c) => c && !get().sigunguBySido[c]);
+      if (!missing.length) return;
       await Promise.all(
         missing.map((sido) =>
           once(`sgg:${sido}`, () =>
@@ -76,7 +77,8 @@ export const useGeoStore = create<GeoState>((set, get) => {
     },
 
     ensureEmd: async (sidoCodes) => {
-      const missing = sidoCodes.filter((c) => !get().emdLoadedSido[c]);
+      const missing = [...new Set(sidoCodes)].filter((c) => c && !get().emdLoadedSido[c]);
+      if (!missing.length) return;
       await Promise.all(
         missing.map((sido) =>
           once(`emd:${sido}`, () =>
