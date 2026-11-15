@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import * as XLSX from "xlsx";
 import { postSearch, type Property } from "../api/mockServer";
 import {
   BUILDING_USE_LABEL,
@@ -42,9 +43,121 @@ function getFullAddress(p: Property): { fullAddress: string; dongAddress: string
   return { fullAddress, dongAddress };
 }
 
+/** 검색된 매물 목록 엑셀(.xlsx) 생성 및 다운로드 (네이버부동산 및 지적도/밸류맵 링크 포함) */
+function exportToExcel(items: Property[]) {
+  if (!items || items.length === 0) return;
+
+  const rows = items.map((p, idx) => {
+    const { fullAddress, dongAddress } = getFullAddress(p);
+    const naverLandUrl = `https://m.land.naver.com/search/result/${encodeURIComponent(dongAddress)}`;
+    const cadastralUrl = `https://map.naver.com/p/search/${encodeURIComponent(fullAddress)}?c=17.00,0,0,0,cadastral`;
+    const valuemapUrl = `https://www.valueupmap.com/search?q=${encodeURIComponent(fullAddress)}`;
+    const kakaoMapUrl = `https://map.kakao.com/?q=${encodeURIComponent(fullAddress)}`;
+
+    const landPyeong = Math.round(p.land_area_sqm / SQM_PER_PYEONG);
+    const bldgPyeong =
+      p.building_area_sqm > 0
+        ? Math.round(p.building_area_sqm / SQM_PER_PYEONG)
+        : 0;
+
+    return {
+      연번: idx + 1,
+      소재지_주소: fullAddress,
+      거래유형: TRADE_LABEL[p.trade_type],
+      "가격(만원)": p.price,
+      "월세(만원)": p.monthly_rent > 0 ? p.monthly_rent : 0,
+      "평당가(만원)": p.price_per_pyeong,
+      "대지면적(㎡)": Math.round(p.land_area_sqm),
+      "대지면적(평)": landPyeong,
+      "연면적(㎡)":
+        p.building_area_sqm > 0 ? Math.round(p.building_area_sqm) : 0,
+      "연면적(평)": bldgPyeong,
+      용도지역: p.land_use_zones.map((z) => ZONE_LABEL[z] ?? z).join(", "),
+      건축물주용도:
+        BUILDING_USE_LABEL[p.building_main_use] ?? p.building_main_use,
+      네이버부동산_링크: naverLandUrl,
+      지적편집도_링크: cadastralUrl,
+      밸류맵실거래_링크: valuemapUrl,
+      카카오맵_링크: kakaoMapUrl,
+    };
+  });
+
+  const ws = XLSX.utils.json_to_sheet(rows);
+
+  // 셀 하이퍼링크 객체 부여 (엑셀 내 클릭 시 바로 브라우저 오픈)
+  const range = XLSX.utils.decode_range(ws["!ref"] || "A1:A1");
+  for (let R = 1; R <= range.e.r; ++R) {
+    const p = items[R - 1];
+    if (!p) continue;
+    const { fullAddress, dongAddress } = getFullAddress(p);
+    const naverLandUrl = `https://m.land.naver.com/search/result/${encodeURIComponent(dongAddress)}`;
+    const cadastralUrl = `https://map.naver.com/p/search/${encodeURIComponent(fullAddress)}?c=17.00,0,0,0,cadastral`;
+    const valuemapUrl = `https://www.valueupmap.com/search?q=${encodeURIComponent(fullAddress)}`;
+    const kakaoMapUrl = `https://map.kakao.com/?q=${encodeURIComponent(fullAddress)}`;
+
+    // 컬럼 12: 네이버부동산, 13: 지적도, 14: 밸류맵, 15: 카카오맵
+    const naverCell = XLSX.utils.encode_cell({ r: R, c: 12 });
+    if (ws[naverCell]) {
+      ws[naverCell].l = {
+        Target: naverLandUrl,
+        Tooltip: "네이버 부동산 매물/시세 지도 바로가기",
+      };
+    }
+    const cadastralCell = XLSX.utils.encode_cell({ r: R, c: 13 });
+    if (ws[cadastralCell]) {
+      ws[cadastralCell].l = {
+        Target: cadastralUrl,
+        Tooltip: "네이버 지도 지적편집도 바로가기",
+      };
+    }
+    const valuemapCell = XLSX.utils.encode_cell({ r: R, c: 14 });
+    if (ws[valuemapCell]) {
+      ws[valuemapCell].l = {
+        Target: valuemapUrl,
+        Tooltip: "밸류맵 토지·건물 실거래가 바로가기",
+      };
+    }
+    const kakaoCell = XLSX.utils.encode_cell({ r: R, c: 15 });
+    if (ws[kakaoCell]) {
+      ws[kakaoCell].l = {
+        Target: kakaoMapUrl,
+        Tooltip: "카카오맵 위치 및 로드뷰 바로가기",
+      };
+    }
+  }
+
+  // 가독성을 위한 열 너비 지정
+  ws["!cols"] = [
+    { wch: 6 }, // 연번
+    { wch: 30 }, // 소재지_주소
+    { wch: 10 }, // 거래유형
+    { wch: 14 }, // 가격
+    { wch: 12 }, // 월세
+    { wch: 14 }, // 평당가
+    { wch: 14 }, // 대지면적(㎡)
+    { wch: 14 }, // 대지면적(평)
+    { wch: 14 }, // 연면적(㎡)
+    { wch: 14 }, // 연면적(평)
+    { wch: 20 }, // 용도지역
+    { wch: 16 }, // 건축물주용도
+    { wch: 42 }, // 네이버부동산_링크
+    { wch: 42 }, // 지적편집도_링크
+    { wch: 42 }, // 밸류맵실거래_링크
+    { wch: 42 }, // 카카오맵_링크
+  ];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "부동산매물목록");
+
+  const now = new Date();
+  const dateStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}_${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
+  XLSX.writeFile(wb, `부동산_검색매물목록_${dateStr}.xlsx`);
+}
+
 export function ResultsModal() {
   const open = useUiStore((s) => s.resultsOpen);
   const setOpen = useUiStore((s) => s.setResultsOpen);
+  const showToast = useUiStore((s) => s.showToast);
   const [data, setData] = useState<{
     total_count: number;
     items: Property[];
@@ -99,6 +212,19 @@ export function ResultsModal() {
             </p>
           </div>
           <div className="modal-head-actions">
+            <button
+              type="button"
+              className="btn-export-excel"
+              disabled={!sortedItems.length}
+              onClick={() => {
+                exportToExcel(sortedItems);
+                showToast(`엑셀 파일(${sortedItems.length}건)을 다운로드했습니다`);
+              }}
+              title="검색된 매물 목록 엑셀(.xlsx) 다운로드 (네이버부동산 및 지적도 링크 포함)"
+            >
+              <span aria-hidden="true">📥</span>
+              <span>엑셀 다운로드</span>
+            </button>
             <select
               className="modal-sort-select"
               aria-label="정렬 기준"
