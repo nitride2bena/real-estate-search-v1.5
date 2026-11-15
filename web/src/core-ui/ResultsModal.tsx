@@ -13,6 +13,35 @@ import { useUiStore } from "../state-store/uiStore";
 const TRADE_LABEL = { SALE: "매매", JEONSE: "전세", MONTHLY: "월세" } as const;
 type SortKey = "ppp_asc" | "price_asc" | "area_desc";
 
+const SIDO_NAME_MAP: Record<string, string> = {
+  "11": "서울",
+  "26": "부산",
+  "27": "대구",
+  "28": "인천",
+  "29": "광주",
+  "30": "대전",
+  "31": "울산",
+  "36": "세종",
+  "41": "경기",
+  "42": "강원",
+  "43": "충북",
+  "44": "충남",
+  "45": "전북",
+  "46": "전남",
+  "47": "경북",
+  "48": "경남",
+  "50": "제주",
+};
+
+function getFullAddress(p: Property): { fullAddress: string; dongAddress: string } {
+  const sidoPrefix = SIDO_NAME_MAP[p.bjd_code.slice(0, 2)] ?? "";
+  const fullAddress = sidoPrefix ? `${sidoPrefix} ${p.address}` : p.address;
+  const parts = p.address.split(" ");
+  const dongPart = parts.length >= 2 ? `${parts[0]} ${parts[1]}` : p.address;
+  const dongAddress = sidoPrefix ? `${sidoPrefix} ${dongPart}` : dongPart;
+  return { fullAddress, dongAddress };
+}
+
 export function ResultsModal() {
   const open = useUiStore((s) => s.resultsOpen);
   const setOpen = useUiStore((s) => s.setResultsOpen);
@@ -134,36 +163,50 @@ export function ResultsModal() {
               </div>
 
               {/* 매물 원본 정보 조회 외부 링크 모음 */}
-              <div className="result-links">
-                <span className="links-title">원래 정보 조회:</span>
-                <a
-                  href={`https://m.land.naver.com/search/result/${encodeURIComponent(p.address)}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="link-chip link-naver"
-                  title="네이버 부동산 매물 원본 검색 (새 창)"
-                >
-                  네이버 부동산 ↗
-                </a>
-                <a
-                  href={`https://www.eum.go.kr/web/ar/lu/luLandDet.jsp?isur=1&mode=search&selGbn=addr&pnu=&addr=${encodeURIComponent(p.address)}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="link-chip link-eum"
-                  title="토지이음 국토계획 및 용도지역 공시정보 (새 창)"
-                >
-                  토지이음 ↗
-                </a>
-                <a
-                  href={`https://map.kakao.com/?q=${encodeURIComponent(p.address)}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="link-chip link-kakao"
-                  title="카카오맵 로드뷰 및 지적도 (새 창)"
-                >
-                  카카오맵 ↗
-                </a>
-              </div>
+              {(() => {
+                const { fullAddress, dongAddress } = getFullAddress(p);
+                return (
+                  <div className="result-links">
+                    <span className="links-title">원래 정보 조회:</span>
+                    <a
+                      href={`https://m.land.naver.com/search/result/${encodeURIComponent(dongAddress)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="link-chip link-naver"
+                      title="네이버 부동산 동 단위 매물 및 시세 검색 (새 창)"
+                    >
+                      네이버 부동산 ↗
+                    </a>
+                    <a
+                      href={`https://map.naver.com/p/search/${encodeURIComponent(fullAddress)}?c=17.00,0,0,0,cadastral`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="link-chip link-cadastral"
+                      title="네이버 지도 지적편집도 및 필지 경계선 조회 (새 창)"
+                    >
+                      지적편집도 ↗
+                    </a>
+                    <a
+                      href={`https://www.valueupmap.com/search?q=${encodeURIComponent(fullAddress)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="link-chip link-valuemap"
+                      title="밸류맵 토지·건물 실거래가 및 토지이용계획 조회 (새 창)"
+                    >
+                      밸류맵 실거래 ↗
+                    </a>
+                    <a
+                      href={`https://map.kakao.com/?q=${encodeURIComponent(fullAddress)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="link-chip link-kakao"
+                      title="카카오맵 위치 및 로드뷰 (새 창)"
+                    >
+                      카카오맵 ↗
+                    </a>
+                  </div>
+                );
+              })()}
             </li>
           ))}
         </ul>

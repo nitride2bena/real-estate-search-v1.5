@@ -1359,6 +1359,26 @@ button {
   color: #fff;
 }
 
+.link-cadastral {
+  background: #0284c718;
+  color: #0284c7;
+  border: 1px solid #0284c738;
+}
+.link-cadastral:hover {
+  background: #0284c7;
+  color: #fff;
+}
+
+.link-valuemap {
+  background: #ff563814;
+  color: #e03818;
+  border: 1px solid #ff563834;
+}
+.link-valuemap:hover {
+  background: #ff5638;
+  color: #fff;
+}
+
 .link-eum {
   background: #2563eb14;
   color: #2563eb;
