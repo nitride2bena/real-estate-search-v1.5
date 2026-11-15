@@ -198,7 +198,12 @@ function computeSelectedBounds(): [number, number, number, number] {
       if (e.isAllSelected || !list) return [sg];
       return e.checkedEmdCodes;
     });
-    if (emds.length > 0) codes = emds;
+    // 3단계에서 모든 읍면동이 일시적으로 해제되었을 때 전국(KOREA_BOUNDS)으로 갑자기 튕기지 않고, 상위 시·군·구 BBox를 유지
+    if (emds.length > 0) {
+      codes = emds;
+    } else {
+      codes = selectedSigunguCodes;
+    }
   }
 
   const boxes = codes
