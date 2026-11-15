@@ -42,13 +42,11 @@ function getInitialMapPadding(drawerOpen: boolean) {
   return { top: 20, right: 20, bottom: Math.round(h * 0.5) + 20, left: 20 };
 }
 
-const initialDrawerOpen = !isInitialTabletPortrait();
-
 export const useUiStore = create<UiStore>((set) => ({
   toast: null,
   showToast: (text) => set({ toast: { id: ++toastId, text } }),
-  // DRD 3.1: 태블릿 세로 모드 진입 시 지도 가시성 확보를 위해 기본 접힘(false) 상태
-  drawerOpen: initialDrawerOpen,
+  // 사용자 사용성 보장: 기본 상태는 항상 패널 열림(true) 상태로 유지
+  drawerOpen: true,
   setDrawerOpen: (drawerOpen) => set({ drawerOpen }),
   sheetSnap: 1,
   setSheetSnap: (sheetSnap) => set({ sheetSnap }),
@@ -56,6 +54,6 @@ export const useUiStore = create<UiStore>((set) => ({
   setResultsOpen: (resultsOpen) => set({ resultsOpen }),
   miniCard: null,
   setMiniCard: (miniCard) => set({ miniCard }),
-  mapPadding: getInitialMapPadding(initialDrawerOpen),
+  mapPadding: getInitialMapPadding(true),
   setMapPadding: (mapPadding) => set({ mapPadding }),
 }));

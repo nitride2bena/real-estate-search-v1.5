@@ -39,27 +39,11 @@ export function useLayoutMode(): LayoutMode {
     }
 
     let prevMode = getMode();
-    let prevPortrait = isTabletPortrait();
-
-    // 최초 마운트 시 태블릿 세로 모드라면 기본 접힘 보장
-    if (prevPortrait) {
-      useUiStore.getState().setDrawerOpen(false);
-    }
 
     const onResize = () => {
       const nextMode = getMode();
-      const nextPortrait = isTabletPortrait();
       setMode(nextMode);
-
-      // DRD 3.1: 태블릿 세로 모드 진입 시 지도 가시성 확보를 위해 드로어 기본 접힘
-      if (nextPortrait && !prevPortrait) {
-        useUiStore.getState().setDrawerOpen(false);
-      } else if ((nextMode === "desktop" && prevMode !== "desktop") || (nextMode === "tablet" && !nextPortrait && prevPortrait)) {
-        useUiStore.getState().setDrawerOpen(true);
-      }
-
       prevMode = nextMode;
-      prevPortrait = nextPortrait;
     };
 
     window.addEventListener("resize", onResize);
