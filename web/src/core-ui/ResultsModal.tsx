@@ -34,13 +34,39 @@ const SIDO_NAME_MAP: Record<string, string> = {
   "50": "제주",
 };
 
-function getFullAddress(p: Property): { fullAddress: string; dongAddress: string } {
+function getFullAddress(p: Property): {
+  fullAddress: string;
+  dongAddress: string;
+  naverQuery: string;
+  naverLandUrl: string;
+  cadastralUrl: string;
+  valuemapUrl: string;
+  kakaoMapUrl: string;
+} {
   const sidoPrefix = SIDO_NAME_MAP[p.bjd_code.slice(0, 2)] ?? "";
   const fullAddress = sidoPrefix ? `${sidoPrefix} ${p.address}` : p.address;
   const parts = p.address.split(" ");
-  const dongPart = parts.length >= 2 ? `${parts[0]} ${parts[1]}` : p.address;
-  const dongAddress = sidoPrefix ? `${sidoPrefix} ${dongPart}` : dongPart;
-  return { fullAddress, dongAddress };
+  const sigungu = parts[0] || "";
+  const dongRaw = parts[1] || "";
+  const dongClean = dongRaw.replace(/(\d+)동$/, "동");
+  const naverQuery = sigungu && dongClean ? `${sigungu} ${dongClean}` : p.address;
+  const dongAddress = sidoPrefix ? `${sidoPrefix} ${sigungu} ${dongClean}` : naverQuery;
+
+  // 공식 네이버페이 부동산 단지/매물 검색 URL (PC 및 모바일 완벽 호환)
+  const naverLandUrl = `https://fin.land.naver.com/search?q=${encodeURIComponent(naverQuery)}`;
+  const cadastralUrl = `https://map.naver.com/p/search/${encodeURIComponent(fullAddress)}?c=17.00,0,0,0,cadastral`;
+  const valuemapUrl = `https://www.valueupmap.com/search?q=${encodeURIComponent(fullAddress)}`;
+  const kakaoMapUrl = `https://map.kakao.com/?q=${encodeURIComponent(fullAddress)}`;
+
+  return {
+    fullAddress,
+    dongAddress,
+    naverQuery,
+    naverLandUrl,
+    cadastralUrl,
+    valuemapUrl,
+    kakaoMapUrl,
+  };
 }
 
 /** 검색된 매물 목록 엑셀(.xlsx) 생성 및 다운로드 (네이버부동산 및 지적도/밸류맵 링크 포함) */
@@ -48,11 +74,13 @@ function exportToExcel(items: Property[]) {
   if (!items || items.length === 0) return;
 
   const rows = items.map((p, idx) => {
-    const { fullAddress, dongAddress } = getFullAddress(p);
-    const naverLandUrl = `https://m.land.naver.com/search/result/${encodeURIComponent(dongAddress)}`;
-    const cadastralUrl = `https://map.naver.com/p/search/${encodeURIComponent(fullAddress)}?c=17.00,0,0,0,cadastral`;
-    const valuemapUrl = `https://www.valueupmap.com/search?q=${encodeURIComponent(fullAddress)}`;
-    const kakaoMapUrl = `https://map.kakao.com/?q=${encodeURIComponent(fullAddress)}`;
+    const {
+      fullAddress,
+      naverLandUrl,
+      cadastralUrl,
+      valuemapUrl,
+      kakaoMapUrl,
+    } = getFullAddress(p);
 
     const landPyeong = Math.round(p.land_area_sqm / SQM_PER_PYEONG);
     const bldgPyeong =
@@ -89,18 +117,19 @@ function exportToExcel(items: Property[]) {
   for (let R = 1; R <= range.e.r; ++R) {
     const p = items[R - 1];
     if (!p) continue;
-    const { fullAddress, dongAddress } = getFullAddress(p);
-    const naverLandUrl = `https://m.land.naver.com/search/result/${encodeURIComponent(dongAddress)}`;
-    const cadastralUrl = `https://map.naver.com/p/search/${encodeURIComponent(fullAddress)}?c=17.00,0,0,0,cadastral`;
-    const valuemapUrl = `https://www.valueupmap.com/search?q=${encodeURIComponent(fullAddress)}`;
-    const kakaoMapUrl = `https://map.kakao.com/?q=${encodeURIComponent(fullAddress)}`;
+    const {
+      naverLandUrl,
+      cadastralUrl,
+      valuemapUrl,
+      kakaoMapUrl,
+    } = getFullAddress(p);
 
     // 컬럼 12: 네이버부동산, 13: 지적도, 14: 밸류맵, 15: 카카오맵
     const naverCell = XLSX.utils.encode_cell({ r: R, c: 12 });
     if (ws[naverCell]) {
       ws[naverCell].l = {
         Target: naverLandUrl,
-        Tooltip: "네이버 부동산 매물/시세 지도 바로가기",
+        Tooltip: "네이버페이 부동산 매물/단지 지도 바로가기",
       };
     }
     const cadastralCell = XLSX.utils.encode_cell({ r: R, c: 13 });
@@ -290,21 +319,26 @@ export function ResultsModal() {
 
               {/* 매물 원본 정보 조회 외부 링크 모음 */}
               {(() => {
-                const { fullAddress, dongAddress } = getFullAddress(p);
+                const {
+                  naverLandUrl,
+                  cadastralUrl,
+                  valuemapUrl,
+                  kakaoMapUrl,
+                } = getFullAddress(p);
                 return (
                   <div className="result-links">
                     <span className="links-title">원래 정보 조회:</span>
                     <a
-                      href={`https://m.land.naver.com/search/result/${encodeURIComponent(dongAddress)}`}
+                      href={naverLandUrl}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="link-chip link-naver"
-                      title="네이버 부동산 동 단위 매물 및 시세 검색 (새 창)"
+                      title="네이버페이 부동산 매물 및 단지 지도 (새 창)"
                     >
                       네이버 부동산 ↗
                     </a>
                     <a
-                      href={`https://map.naver.com/p/search/${encodeURIComponent(fullAddress)}?c=17.00,0,0,0,cadastral`}
+                      href={cadastralUrl}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="link-chip link-cadastral"
@@ -313,7 +347,7 @@ export function ResultsModal() {
                       지적편집도 ↗
                     </a>
                     <a
-                      href={`https://www.valueupmap.com/search?q=${encodeURIComponent(fullAddress)}`}
+                      href={valuemapUrl}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="link-chip link-valuemap"
@@ -322,7 +356,7 @@ export function ResultsModal() {
                       밸류맵 실거래 ↗
                     </a>
                     <a
-                      href={`https://map.kakao.com/?q=${encodeURIComponent(fullAddress)}`}
+                      href={kakaoMapUrl}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="link-chip link-kakao"
