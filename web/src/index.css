@@ -1318,6 +1318,67 @@ button {
   border-radius: 4px;
 }
 
+/* 매물 원본 외부 조회 링크 */
+.result-links {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-color);
+}
+
+.links-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-right: 2px;
+}
+
+.link-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 4px;
+  text-decoration: none;
+  transition: all 0.15s ease;
+  line-height: 1.4;
+}
+
+.link-naver {
+  background: #03c75a18;
+  color: #03a84e;
+  border: 1px solid #03c75a40;
+}
+.link-naver:hover {
+  background: #03c75a;
+  color: #fff;
+}
+
+.link-eum {
+  background: #2563eb14;
+  color: #2563eb;
+  border: 1px solid #2563eb30;
+}
+.link-eum:hover {
+  background: #2563eb;
+  color: #fff;
+}
+
+.link-kakao {
+  background: #fee50028;
+  color: #795500;
+  border: 1px solid #e5ce00;
+}
+.link-kakao:hover {
+  background: #fee500;
+  color: #191919;
+}
+
 .modal-foot {
   padding: 10px 20px;
   font-size: 11px;

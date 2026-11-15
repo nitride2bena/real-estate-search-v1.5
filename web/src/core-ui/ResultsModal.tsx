@@ -132,6 +132,38 @@ export function ResultsModal() {
                   </span>
                 ))}
               </div>
+
+              {/* 매물 원본 정보 조회 외부 링크 모음 */}
+              <div className="result-links">
+                <span className="links-title">원래 정보 조회:</span>
+                <a
+                  href={`https://m.land.naver.com/search/result/${encodeURIComponent(p.address)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="link-chip link-naver"
+                  title="네이버 부동산 매물 원본 검색 (새 창)"
+                >
+                  네이버 부동산 ↗
+                </a>
+                <a
+                  href={`https://www.eum.go.kr/web/ar/lu/luLandDet.jsp?isur=1&mode=search&selGbn=addr&pnu=&addr=${encodeURIComponent(p.address)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="link-chip link-eum"
+                  title="토지이음 국토계획 및 용도지역 공시정보 (새 창)"
+                >
+                  토지이음 ↗
+                </a>
+                <a
+                  href={`https://map.kakao.com/?q=${encodeURIComponent(p.address)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="link-chip link-kakao"
+                  title="카카오맵 로드뷰 및 지적도 (새 창)"
+                >
+                  카카오맵 ↗
+                </a>
+              </div>
             </li>
           ))}
         </ul>
