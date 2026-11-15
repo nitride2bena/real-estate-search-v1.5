@@ -56,7 +56,7 @@ export function RangeSlider({
   const text =
     lo === 0 && hi === last
       ? "전체"
-      : `${lo === 0 ? "최소" : format(ticks[lo])} ~ ${hi === last ? "최대" : format(ticks[hi])}`;
+      : `${lo === 0 ? "최소" : format(ticks[Math.min(lo, hi)])} ~ ${hi === last ? "최대" : format(ticks[Math.max(lo, hi)])}`;
 
   return (
     <div className="range">

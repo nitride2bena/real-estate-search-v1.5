@@ -126,8 +126,8 @@ export const useRegionStore = create<RegionStore>((set, get) => ({
     const s = get();
     if (s.selectedSigunguCodes.includes(code)) {
       const curEmd = s.selectedEmdBySigungu[code];
-      // 3단계에서 모든 동이 해제된(0개) 상태였던 시군구를 2단계에서 다시 클릭하면 전체 선택으로 복원
-      if (curEmd && !curEmd.isAllSelected && curEmd.checkedEmdCodes.length === 0) {
+      // UX 개선: 3단계에서 일부 해제(mixed)되었거나 0개 선택 상태인 경우 클릭 시 먼저 전체 선택으로 복원
+      if (curEmd && !curEmd.isAllSelected) {
         set({
           selectedEmdBySigungu: {
             ...s.selectedEmdBySigungu,
