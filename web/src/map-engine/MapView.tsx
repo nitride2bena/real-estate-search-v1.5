@@ -234,6 +234,26 @@ export function MapView({ layout, hoverCapable }: { layout: LayoutMode; hoverCap
   const count = useCountStore((s) => s.data);
   const padding = useUiStore((s) => s.mapPadding);
   const setMiniCard = useUiStore((s) => s.setMiniCard);
+  const sheetSnap = useUiStore((s) => s.sheetSnap);
+
+  // 모바일 바텀시트 스냅 및 뷰포트 레이아웃 변경 시 지도 리사이즈 보장
+  useEffect(() => {
+    if (!mapRef.current) return;
+    const r1 = requestAnimationFrame(() => {
+      mapRef.current?.resize();
+    });
+    const t = setTimeout(() => {
+      mapRef.current?.resize();
+    }, 200);
+    const t2 = setTimeout(() => {
+      mapRef.current?.resize();
+    }, 450);
+    return () => {
+      cancelAnimationFrame(r1);
+      clearTimeout(t);
+      clearTimeout(t2);
+    };
+  }, [sheetSnap, layout]);
 
   // FR-14: 모바일(150개) / 데스크톱(500개) 및 저사양 GPU 티어 기반 동적 LOD 상한선
   const limit = layout === "mobile" || !hoverCapable || gpuTier === "low" ? LOD_LIMIT.mobile : LOD_LIMIT.desktop;
@@ -346,6 +366,25 @@ export function MapView({ layout, hoverCapable }: { layout: LayoutMode; hoverCap
     map.touchZoomRotate.disableRotation();
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
     mapRef.current = map;
+
+    map.on("error", (e) => {
+      // 폰트 글리프 또는 일부 타일 404 무시
+      const msg = e?.error?.message ?? "";
+      if (msg.includes("glyph") || msg.includes("sprite")) return;
+      console.warn("MapLibre handled error:", msg);
+    });
+
+    const canvas = map.getCanvas();
+    const handleContextLost = (e: Event) => {
+      e.preventDefault();
+      console.warn("Map WebGL context lost");
+    };
+    const handleContextRestored = () => {
+      console.info("Map WebGL context restored");
+      map.resize();
+    };
+    canvas?.addEventListener("webglcontextlost", handleContextLost);
+    canvas?.addEventListener("webglcontextrestored", handleContextRestored);
 
     map.on("load", () => {
       LEVELS.forEach((l) => addLevelLayers(map, l));

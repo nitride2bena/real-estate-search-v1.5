@@ -65,11 +65,13 @@ button {
   flex: 1;
   height: 100%;
   position: relative;
+  background: #e2e8f0;
 }
 
 .map-canvas {
   width: 100%;
   height: 100%;
+  background: #e2e8f0;
 }
 
 /* FR-14: 동적 LOD 안내 배지 */
@@ -347,6 +349,37 @@ button {
   padding: 16px;
 }
 
+/* 모바일 바텀시트 하단 고정 액션바에 가려지지 않도록 안전 여백 확보 */
+.search-panel.layout-mobile .panel-scroll-area {
+  padding-bottom: calc(110px + env(safe-area-inset-bottom, 24px));
+}
+
+/* 상단 빠른 다음 단계 이동 배너 버튼 */
+.btn-next-top {
+  width: 100%;
+  min-height: 42px;
+  padding: 8px 14px;
+  margin-bottom: 12px;
+  background: #eff6ff;
+  color: var(--primary);
+  border: 1.5px solid #bfdbfe;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  transition: all 0.15s ease;
+}
+
+.btn-next-top:hover {
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary);
+}
+
 /* DRD 4.1: 스테퍼 (1. 시·도 > 2. 시·군·구 > 3. 읍·면·동) */
 .stepper {
   display: flex;
@@ -368,7 +401,7 @@ button {
 .stepper-btn {
   min-height: 44px;
   min-width: 44px;
-  border: none;
+  border: 1px solid transparent;
   background: none;
   display: inline-flex;
   align-items: center;
@@ -377,19 +410,28 @@ button {
   font-weight: 600;
   color: var(--text-muted);
   cursor: pointer;
-  padding: 0 8px;
+  padding: 0 10px;
   border-radius: var(--radius-sm);
   white-space: nowrap;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition: all 0.15s ease;
 }
 
-.stepper-btn:hover:not(:disabled) {
-  background: #f8fafc;
+.stepper-btn:not(:disabled):not(.is-current) {
+  border: 1px solid var(--border-color);
+  background: #ffffff;
+  color: #334155;
+}
+
+.stepper-btn:not(:disabled):not(.is-current):hover {
+  background: #f1f5f9;
+  border-color: var(--primary);
+  color: var(--primary);
 }
 
 .stepper-btn.is-current {
   color: var(--primary);
   background: var(--primary-light);
+  border-color: var(--primary-light);
 }
 
 .stepper-btn.is-done {
@@ -1186,6 +1228,19 @@ button {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+@media (max-width: 767px) {
+  .modal-backdrop {
+    padding: 0;
+  }
+  .modal {
+    max-width: 100%;
+    width: 100%;
+    height: 100%;
+    max-height: 100%;
+    border-radius: 0;
+  }
 }
 
 .modal-head {

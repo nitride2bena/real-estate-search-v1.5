@@ -118,6 +118,18 @@ export function SidoStep() {
         </div>
       </div>
 
+      {/* 모바일 및 상단 빠른 다음 단계 이동 버튼 */}
+      {selectedSidoCodes.length > 0 && (
+        <button
+          type="button"
+          className="btn-next-top"
+          onClick={() => setStep(2)}
+          aria-label="시·군·구 선택 단계로 이동"
+        >
+          <span>시·도 {selectedSidoCodes.length}개 선택됨 · <strong>다음: 시·군·구 선택 →</strong></span>
+        </button>
+      )}
+
       {!sido.length && (
         <div className="chip-grid" aria-busy="true">
           {Array.from({ length: 17 }, (_, i) => (
@@ -206,6 +218,18 @@ export function SigunguStep() {
           </button>
         </div>
       </div>
+
+      {/* 모바일 및 상단 빠른 다음 단계 이동 버튼 */}
+      {region.selectedSigunguCodes.length > 0 && (
+        <button
+          type="button"
+          className="btn-next-top"
+          onClick={() => region.setStep(3)}
+          aria-label="읍·면·동 정밀 선택 단계로 이동"
+        >
+          <span>시·군·구 {region.selectedSigunguCodes.length}개 선택됨 · <strong>다음: 읍·면·동 정밀 선택 →</strong></span>
+        </button>
+      )}
 
       {/* 시·군·구 빠른 검색 필터 */}
       <div className="search-filter-box">
