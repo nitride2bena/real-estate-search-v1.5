@@ -8,9 +8,42 @@ import {
   ZONING,
   formatMoney,
 } from "../domain/constants";
+import { toUnifiedSearchSchema } from "../domain/platformLinks";
 import { useFilterStore, type AreaUnit } from "../state-store/filterStore";
+import { useRegionStore } from "../state-store/regionStore";
+import { useUiStore } from "../state-store/uiStore";
 import type { Range } from "../api/mockServer";
+import { copyTextToClipboard } from "./clipboard";
 import { MinMaxInput, RangeSlider } from "./RangeSlider";
+
+interface FilterPreset {
+  id: string;
+  label: string;
+  zoning: string[];
+  buildingUses: string[];
+  tradeType?: "ALL" | "SALE" | "JEONSE" | "MONTHLY";
+}
+
+const FILTER_PRESETS: FilterPreset[] = [
+  {
+    id: "residential",
+    label: "주거용",
+    zoning: ["UQA111", "UQA112", "UQA121", "UQA122", "UQA123", "UQA130"],
+    buildingUses: ["01000", "02000"],
+  },
+  {
+    id: "commercial",
+    label: "상가·근생",
+    zoning: ["UQA130", "UQA210", "UQA220", "UQA230"],
+    buildingUses: ["03000", "04000", "07000", "14000"],
+  },
+  {
+    id: "industrial",
+    label: "토지·공장/창고",
+    zoning: ["UQA310", "UQA320", "UQA330", "UQB300"],
+    buildingUses: ["00000", "17000", "18000"],
+  },
+];
 
 const sqmToPy = (v: number) => v / SQM_PER_PYEONG;
 const pyToSqm = (v: number) => v * SQM_PER_PYEONG;
@@ -111,6 +144,7 @@ function AreaSection({
 /** DRD 4.3: 상세 조건 탭 UI 컴포넌트 */
 export function FilterTab() {
   const f = useFilterStore();
+  const showToast = useUiStore((s) => s.showToast);
   const [openZone, setOpenZone] = useState<string | null>("R");
 
   const priceLabel =
@@ -122,8 +156,60 @@ export function FilterTab() {
 
   const allZoneCodes = ZONING.flatMap((g) => g.items.map((i) => i.code));
 
+  const isPresetActive = (preset: FilterPreset) =>
+    preset.zoning.length === f.zoning.length &&
+    preset.zoning.every((z) => f.zoning.includes(z)) &&
+    preset.buildingUses.length === f.buildingUses.length &&
+    preset.buildingUses.every((u) => f.buildingUses.includes(u));
+
+  const applyPreset = (preset: FilterPreset) => {
+    f.restore({
+      landUnit: f.landUnit,
+      buildingUnit: f.buildingUnit,
+      tradeType: preset.tradeType ?? f.tradeType,
+      zoning: [...preset.zoning],
+      buildingUses: [...preset.buildingUses],
+    });
+    showToast(`'${preset.label}' 프리셋 조건을 적용했습니다`);
+  };
+
   return (
     <div className="filter-tab">
+      {/* 0. 빠른 투자·실거주 프리셋 칩 */}
+      <section className="f-section" aria-label="빠른 조건 프리셋">
+        <div className="f-head">
+          <h4>
+            빠른 조건 프리셋 <small>목적별 원클릭 세팅</small>
+          </h4>
+        </div>
+        <div className="preset-chips">
+          <button
+            type="button"
+            className="chip chip-sm"
+            onClick={() => {
+              f.reset();
+              showToast("상세 조건을 초기화했습니다");
+            }}
+          >
+            전체 초기화
+          </button>
+          {FILTER_PRESETS.map((preset) => {
+            const active = isPresetActive(preset);
+            return (
+              <button
+                key={preset.id}
+                type="button"
+                aria-pressed={active}
+                className={`chip chip-sm ${active ? "is-on" : ""}`}
+                onClick={() => applyPreset(preset)}
+              >
+                {preset.label}
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
       {/* 1. 거래유형 세그먼트 컨트롤 */}
       <section className="f-section" aria-label="거래유형">
         <div className="f-head">
@@ -357,9 +443,40 @@ export function FilterTab() {
         </div>
       </section>
 
-      <button type="button" className="btn-outline" onClick={f.reset}>
-        상세 조건 초기화
-      </button>
+      <div className="filter-footer-actions">
+        <button
+          type="button"
+          className="btn-schema-copy"
+          onClick={async () => {
+            const schema = toUnifiedSearchSchema(
+              useRegionStore.getState(),
+              useFilterStore.getState(),
+            );
+            const ok = await copyTextToClipboard(
+              JSON.stringify(schema, null, 2),
+            );
+            showToast(
+              ok
+                ? "통합 검색 스키마(JSON)를 클립보드에 복사했습니다"
+                : "클립보드 복사에 실패했습니다",
+            );
+          }}
+        >
+          <span aria-hidden="true">📋</span>
+          <span>통합 검색 스키마(JSON) 복사</span>
+        </button>
+
+        <button
+          type="button"
+          className="btn-outline"
+          onClick={() => {
+            f.reset();
+            showToast("상세 조건을 초기화했습니다");
+          }}
+        >
+          상세 조건 초기화
+        </button>
+      </div>
     </div>
   );
 }

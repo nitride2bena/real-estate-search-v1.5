@@ -5,6 +5,9 @@ import { feature } from "topojson-client";
 import type { Topology, GeometryObject } from "topojson-specification";
 import type { Feature, MultiPolygon, Polygon } from "geojson";
 import { storage } from "../platform-bridge/storage";
+import { SIDO_NAME_MAP, GWANGJU_SIGUNGU_CODES, getSidoShortName } from "../domain/constants";
+
+export { SIDO_NAME_MAP, GWANGJU_SIGUNGU_CODES, getSidoShortName };
 
 export interface RegionProps {
   code: string;

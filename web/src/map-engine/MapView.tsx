@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import maplibregl, { type GeoJSONSource, type MapLayerMouseEvent } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { FeatureCollection, Point } from "geojson";
@@ -129,6 +129,8 @@ function computeEffectivePadding(
   mapEl: HTMLElement,
   storePadding: { top: number; right: number; bottom: number; left: number },
   layout: LayoutMode,
+  drawerOpen: boolean,
+  sheetSnap: 0 | 1 | 2,
 ): { top: number; right: number; bottom: number; left: number } {
   const mapRect = mapEl.getBoundingClientRect();
   const panelEl = document.querySelector<HTMLElement>(".search-panel");
@@ -141,22 +143,35 @@ function computeEffectivePadding(
     left: baseMargin,
   };
 
-  if (panelEl && mapRect.width > 0 && mapRect.height > 0) {
-    const panelRect = panelEl.getBoundingClientRect();
-    const isCollapsed = panelEl.classList.contains("is-collapsed");
-
+  if (mapRect.width > 0 && mapRect.height > 0) {
     if (layout === "mobile") {
-      const overlapBottom = Math.max(0, Math.round(mapRect.bottom - panelRect.top));
-      p.bottom = Math.max(overlapBottom + baseMargin, storePadding.bottom);
+      // 바텀시트 스냅 목표 높이 기준으로 계산해 CSS height 전환 도중 패딩 흔들림 방지
+      const targetSheetH =
+        sheetSnap === 0
+          ? Math.max(124, Math.round(mapRect.height * 0.15))
+          : sheetSnap === 1
+            ? Math.round(mapRect.height * 0.5)
+            : Math.round(mapRect.height * 0.9);
+      const domOverlap = panelEl
+        ? Math.max(0, Math.round(mapRect.bottom - panelEl.getBoundingClientRect().top))
+        : 0;
+      const effectiveSheetH =
+        domOverlap > 0 && Math.abs(domOverlap - targetSheetH) < 24
+          ? Math.max(targetSheetH, domOverlap)
+          : targetSheetH;
+      p.bottom = Math.max(effectiveSheetH + baseMargin, storePadding.bottom);
     } else if (layout === "tablet") {
-      if (!isCollapsed) {
-        const overlapLeft = Math.max(0, Math.round(panelRect.right - mapRect.left));
-        p.left = Math.max(overlapLeft + baseMargin, storePadding.left);
+      // 드로어 transform 애니메이션 중 getBoundingClientRect().right 편차 대신 최종 상태 기준 계산
+      if (drawerOpen) {
+        const panelWidth = panelEl && panelEl.offsetWidth > 0 ? panelEl.offsetWidth : 360;
+        p.left = Math.max(panelWidth + baseMargin, storePadding.left);
+      } else {
+        p.left = baseMargin;
       }
-    } else {
+    } else if (panelEl) {
       // 데스크톱: 패널이 지도 컨테이너와 실제로 겹치는 픽셀만큼만 좌측 패딩 추가
       // (Flex 레이아웃에서 이미 map-container가 패널 우측에 분리된 경우 중복 패딩 방지)
-      const overlapLeft = Math.max(0, Math.round(panelRect.right - mapRect.left));
+      const overlapLeft = Math.max(0, Math.round(panelEl.getBoundingClientRect().right - mapRect.left));
       p.left = overlapLeft > 10 ? overlapLeft + baseMargin : baseMargin;
     }
   } else {
@@ -225,35 +240,67 @@ export function MapView({ layout, hoverCapable }: { layout: LayoutMode; hoverCap
   const [tip, setTip] = useState<{ x: number; y: number; code: string; level: Level } | null>(null);
   const [panelRectKey, setPanelRectKey] = useState("");
   const planRef = useRef<Plan | null>(null);
-  const hoverRef = useRef<{ level: Level; id: string } | null>(null);
+  const hoverRef = useRef<{ level: Level; id: string; mode: "mouse" | "touch" } | null>(null);
   const envRef = useRef({ layout, hoverCapable });
   envRef.current = { layout, hoverCapable };
+  const lastSizeRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
+  const panelAnimatingUntilRef = useRef(0);
 
   const geo = useGeoStore();
   const region = useRegionStore();
   const count = useCountStore((s) => s.data);
   const padding = useUiStore((s) => s.mapPadding);
+  const miniCard = useUiStore((s) => s.miniCard);
   const setMiniCard = useUiStore((s) => s.setMiniCard);
   const sheetSnap = useUiStore((s) => s.sheetSnap);
+  const drawerOpen = useUiStore((s) => s.drawerOpen);
+  const prevPanelStateRef = useRef({ layout, drawerOpen, sheetSnap });
 
-  // 모바일 바텀시트 스냅 및 뷰포트 레이아웃 변경 시 지도 리사이즈 보장
+  const clearHover = useCallback(() => {
+    const map = mapRef.current;
+    const prev = hoverRef.current;
+    if (map && prev && map.getSource(prev.level)) {
+      map.setFeatureState({ source: prev.level, id: prev.id }, { hover: false });
+    }
+    hoverRef.current = null;
+    if (map) map.getCanvas().style.cursor = "";
+    setTip(null);
+  }, []);
+
+  const syncMapSize = useCallback(() => {
+    const map = mapRef.current;
+    const el = ref.current;
+    if (!map || !el) return;
+    const w = Math.round(el.clientWidth);
+    const h = Math.round(el.clientHeight);
+    if (w > 0 && h > 0 && (w !== lastSizeRef.current.w || h !== lastSizeRef.current.h)) {
+      lastSizeRef.current = { w, h };
+      map.resize();
+    }
+  }, []);
+
+  // miniCard가 닫히거나(✕/Esc) 데스크톱 모드로 전환되면 터치 잔존 hover 해제
+  useEffect(() => {
+    if (!miniCard && hoverRef.current?.mode === "touch") {
+      clearHover();
+    }
+  }, [miniCard, clearHover]);
+
+  useEffect(() => {
+    if (layout === "desktop" && hoverCapable) {
+      if (hoverRef.current?.mode === "touch") clearHover();
+      if (useUiStore.getState().miniCard) setMiniCard(null);
+    }
+  }, [layout, hoverCapable, clearHover, setMiniCard]);
+
+  // 레이아웃 전환 직후 Flex 컨테이너 크기 변경 즉시 반영 (fitBounds 애니메이션 중 중복 resize 방지)
   useEffect(() => {
     if (!mapRef.current) return;
     const r1 = requestAnimationFrame(() => {
-      mapRef.current?.resize();
+      syncMapSize();
     });
-    const t = setTimeout(() => {
-      mapRef.current?.resize();
-    }, 200);
-    const t2 = setTimeout(() => {
-      mapRef.current?.resize();
-    }, 450);
-    return () => {
-      cancelAnimationFrame(r1);
-      clearTimeout(t);
-      clearTimeout(t2);
-    };
-  }, [sheetSnap, layout]);
+    return () => cancelAnimationFrame(r1);
+  }, [layout, syncMapSize]);
 
   // FR-14: 모바일(150개) / 데스크톱(500개) 및 저사양 GPU 티어 기반 동적 LOD 상한선
   const limit = layout === "mobile" || !hoverCapable || gpuTier === "low" ? LOD_LIMIT.mobile : LOD_LIMIT.desktop;
@@ -333,23 +380,57 @@ export function MapView({ layout, hoverCapable }: { layout: LayoutMode; hoverCap
   }, [region, geo.sido, geo.sigunguBySido, geo.emdBySigungu, limit]);
   planRef.current = plan;
 
-  // ---------- FR-12: .search-panel 및 지도 컨테이너 ResizeObserver 관찰 ----------
+  // ---------- FR-12: .search-panel 및 지도 컨테이너 ResizeObserver / transitionend 관찰 ----------
   useEffect(() => {
     if (typeof ResizeObserver === "undefined") return;
     const panelEl = document.querySelector<HTMLElement>(".search-panel");
     const mapEl = ref.current;
+    let panelTimer: ReturnType<typeof setTimeout> | null = null;
+    let lastMapW = mapEl ? Math.round(mapEl.clientWidth) : 0;
+    let lastMapH = mapEl ? Math.round(mapEl.clientHeight) : 0;
+
+    const commitPanelRect = () => {
+      if (!panelEl) return;
+      const r = panelEl.getBoundingClientRect();
+      const collapsed = panelEl.classList.contains("is-collapsed") ? "1" : "0";
+      setPanelRectKey(`${Math.round(r.width)}x${Math.round(r.height)}@${Math.round(r.left)},${Math.round(r.top)}:${collapsed}`);
+    };
+
     const ro = new ResizeObserver(() => {
-      mapRef.current?.resize();
+      if (mapEl) {
+        const w = Math.round(mapEl.clientWidth);
+        const h = Math.round(mapEl.clientHeight);
+        if (w !== lastMapW || h !== lastMapH) {
+          lastMapW = w;
+          lastMapH = h;
+          syncMapSize();
+        }
+      }
       if (panelEl) {
-        const r = panelEl.getBoundingClientRect();
-        const collapsed = panelEl.classList.contains("is-collapsed") ? "1" : "0";
-        setPanelRectKey(`${Math.round(r.width)}x${Math.round(r.height)}@${Math.round(r.left)},${Math.round(r.top)}:${collapsed}`);
+        if (panelTimer) clearTimeout(panelTimer);
+        panelTimer = setTimeout(commitPanelRect, 140);
       }
     });
-    if (panelEl) ro.observe(panelEl);
+
+    const onTransitionEnd = (e: TransitionEvent) => {
+      if (e.target === panelEl && (e.propertyName === "height" || e.propertyName === "transform")) {
+        panelAnimatingUntilRef.current = 0;
+        syncMapSize();
+        commitPanelRect();
+      }
+    };
+
+    if (panelEl) {
+      ro.observe(panelEl);
+      panelEl.addEventListener("transitionend", onTransitionEnd);
+    }
     if (mapEl) ro.observe(mapEl);
-    return () => ro.disconnect();
-  }, [layout]);
+    return () => {
+      if (panelTimer) clearTimeout(panelTimer);
+      ro.disconnect();
+      panelEl?.removeEventListener("transitionend", onTransitionEnd);
+    };
+  }, [layout, syncMapSize]);
 
   // ---------- 지도 초기화 ----------
   useEffect(() => {
@@ -381,6 +462,7 @@ export function MapView({ layout, hoverCapable }: { layout: LayoutMode; hoverCap
     };
     const handleContextRestored = () => {
       console.info("Map WebGL context restored");
+      lastSizeRef.current = { w: 0, h: 0 };
       map.resize();
     };
     canvas?.addEventListener("webglcontextlost", handleContextLost);
@@ -428,17 +510,15 @@ export function MapView({ layout, hoverCapable }: { layout: LayoutMode; hoverCap
             map.setFeatureState({ source: prev.level, id: prev.id }, { hover: false });
           }
           map.setFeatureState({ source: lvl, id }, { hover: true });
-          hoverRef.current = { level: lvl, id };
+          hoverRef.current = { level: lvl, id, mode: "mouse" };
           map.getCanvas().style.cursor = "pointer";
           setTip({ x: e.point.x, y: e.point.y, code: id, level: lvl });
         });
 
         map.on("mouseleave", layer, () => {
-          const prev = hoverRef.current;
-          if (prev) map.setFeatureState({ source: prev.level, id: prev.id }, { hover: false });
-          hoverRef.current = null;
-          map.getCanvas().style.cursor = "";
-          setTip(null);
+          if (hoverRef.current?.mode === "mouse") {
+            clearHover();
+          }
         });
 
         // FR-11: 클릭/탭 시 선택·해제 토글, 모바일·태블릿(터치)에서는 하단 요약 미니 카드 노출
@@ -464,13 +544,37 @@ export function MapView({ layout, hoverCapable }: { layout: LayoutMode; hoverCap
               map.setFeatureState({ source: prev.level, id: prev.id }, { hover: false });
             }
             map.setFeatureState({ source: lvl, id: code }, { hover: true });
-            hoverRef.current = { level: lvl, id: code };
+            hoverRef.current = { level: lvl, id: code, mode: "touch" };
 
             const f = useGeoStore.getState().byCode[code];
             if (f) setMiniCard({ feature: f, level: lvl });
           }
         });
       }
+
+      // 빈 지도 영역 클릭(탭) 시 잔존 hover feature-state 및 miniCard 해제
+      map.on("click", (e) => {
+        const active = planRef.current?.active;
+        if (active) {
+          const activeLayer = `${active}-fill`;
+          const hits = map.getLayer(activeLayer)
+            ? map.queryRenderedFeatures(e.point, { layers: [activeLayer] })
+            : [];
+          if (hits.some((f) => Boolean(f.properties?.code))) return;
+        }
+        clearHover();
+        if (useUiStore.getState().miniCard) {
+          setMiniCard(null);
+        }
+      });
+
+      map.on("mouseout", () => {
+        if (hoverRef.current?.mode === "mouse") {
+          clearHover();
+        }
+      });
+
+      syncMapSize();
       setReady(true);
     });
 
@@ -508,7 +612,15 @@ export function MapView({ layout, hoverCapable }: { layout: LayoutMode; hoverCap
       setVisible(map, `${l}-line-hover`, active);
       setVisible(map, `${l}-ctx`, plan.context.includes(l));
     }
-    const hov = hoverRef.current;
+    let hov = hoverRef.current;
+    if (hov && (hov.level !== plan.active || !plan.state[hov.id])) {
+      if (map.getSource(hov.level)) {
+        map.setFeatureState({ source: hov.level, id: hov.id }, { hover: false });
+      }
+      hoverRef.current = null;
+      hov = null;
+      setTip(null);
+    }
     for (const [id, st] of Object.entries(plan.state)) {
       const isHovered = hov?.level === plan.active && hov.id === id;
       map.setFeatureState({ source: plan.active, id }, { ...st, hover: isHovered });
@@ -559,9 +671,22 @@ export function MapView({ layout, hoverCapable }: { layout: LayoutMode; hoverCap
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !ready) return;
+
+    const prev = prevPanelStateRef.current;
+    const panelChanged =
+      prev.layout !== layout || prev.drawerOpen !== drawerOpen || prev.sheetSnap !== sheetSnap;
+    if (panelChanged) {
+      prevPanelStateRef.current = { layout, drawerOpen, sheetSnap };
+      panelAnimatingUntilRef.current = Date.now() + 340;
+    }
+
+    const remainingAnim = Math.max(0, panelAnimatingUntilRef.current - Date.now());
+    const delay = Math.max(120, remainingAnim);
+
     const t = setTimeout(() => {
+      syncMapSize();
       const b = computeSelectedBounds();
-      const p = computeEffectivePadding(map.getContainer(), padding, layout);
+      const p = computeEffectivePadding(map.getContainer(), padding, layout, drawerOpen, sheetSnap);
       map.fitBounds(
         [
           [b[0], b[1]],
@@ -569,15 +694,16 @@ export function MapView({ layout, hoverCapable }: { layout: LayoutMode; hoverCap
         ],
         { padding: p, duration: 500, maxZoom: 13.5 },
       );
-    }, 120);
+    }, delay);
     return () => clearTimeout(t);
-  }, [ready, fitKey, padding, layout, panelRectKey]);
+  }, [ready, fitKey, padding, layout, drawerOpen, sheetSnap, panelRectKey, syncMapSize]);
 
   // ---------- 전체 한반도 보기 (뷰포트 리셋) 핸들러 ----------
   const handleResetViewport = useCallback(() => {
     const map = mapRef.current;
     if (!map) return;
-    const p = computeEffectivePadding(map.getContainer(), padding, layout);
+    syncMapSize();
+    const p = computeEffectivePadding(map.getContainer(), padding, layout, drawerOpen, sheetSnap);
     map.fitBounds(
       [
         [KOREA_BOUNDS[0], KOREA_BOUNDS[1]],
@@ -585,7 +711,7 @@ export function MapView({ layout, hoverCapable }: { layout: LayoutMode; hoverCap
       ],
       { padding: p, duration: 500 },
     );
-  }, [padding, layout]);
+  }, [padding, layout, drawerOpen, sheetSnap, syncMapSize]);
 
   // ---------- FR-11: 데스크톱 플로팅 툴팁 데이터 ----------
   const tipFeature = tip ? geo.byCode[tip.code] : null;
@@ -599,11 +725,52 @@ export function MapView({ layout, hoverCapable }: { layout: LayoutMode; hoverCap
     return sigunguState(region, tip.code) === "mixed";
   }, [tip, region]);
 
+  const isCompact = layout !== "desktop";
+  const isLoading = geo.pending > 0;
+  const lodChipStyle: CSSProperties =
+    layout === "desktop"
+      ? {
+          top: 58,
+          left: "50%",
+          transform: "translateX(-50%)",
+          maxWidth: "calc(100% - 48px)",
+          whiteSpace: "normal",
+          textAlign: "center",
+          lineHeight: 1.35,
+        }
+      : layout === "tablet"
+        ? {
+            top: 58,
+            left: drawerOpen ? 412 : 56,
+            right: 96,
+            transform: "none",
+            width: "fit-content",
+            maxWidth: drawerOpen ? "calc(100% - 508px)" : "calc(100% - 152px)",
+            marginInline: "auto",
+            whiteSpace: "normal",
+            textAlign: "center",
+            lineHeight: 1.35,
+          }
+        : {
+            top: isLoading ? 58 : 12,
+            left: 12,
+            right: isLoading ? 84 : 50,
+            transform: "none",
+            width: "fit-content",
+            maxWidth: isLoading ? "calc(100% - 96px)" : "calc(100% - 62px)",
+            marginInline: "auto",
+            whiteSpace: "normal",
+            textAlign: "center",
+            lineHeight: 1.35,
+            transition: "top 0.2s ease",
+          };
+
   return (
     <div className="map-container">
       <div ref={ref} className="map-canvas" />
 
       {/* 우측 상단 컨트롤 영역: 전체 한반도 보기(뷰포트 리셋) 버튼 */}
+      {/* 모바일·태블릿에서는 상단 중앙 로딩 필과의 충돌을 피해 NavigationControl(우측 상단) 바로 아래에 배치 */}
       <button
         type="button"
         className="map-reset-bounds-btn"
@@ -612,11 +779,11 @@ export function MapView({ layout, hoverCapable }: { layout: LayoutMode; hoverCap
         aria-label="전체 한반도 보기 (뷰포트 리셋)"
         style={{
           position: "absolute",
-          top: 10,
-          right: 48,
+          top: isCompact ? 76 : 10,
+          right: isCompact ? 10 : 48,
           zIndex: 15,
-          minHeight: 36,
-          padding: "0 12px",
+          minHeight: isCompact ? 40 : 36,
+          padding: isCompact ? "0 10px" : "0 12px",
           background: "rgba(255, 255, 255, 0.96)",
           color: "#0f172a",
           border: "1px solid #cbd5e1",
@@ -635,12 +802,12 @@ export function MapView({ layout, hoverCapable }: { layout: LayoutMode; hoverCap
         <span aria-hidden="true" style={{ fontSize: 13 }}>
           🗺️
         </span>
-        <span>전체 한반도 보기</span>
+        <span>{layout === "desktop" ? "전체 한반도 보기" : layout === "tablet" ? "전체 보기" : "전체"}</span>
       </button>
 
-      {/* FR-14: 디바이스 GPU 티어 기반 동적 LOD 안내 배지 */}
-      {plan.lod && (
-        <div className="lod-chip" role="status" aria-live="polite">
+      {/* FR-14: 디바이스 GPU 티어 기반 동적 LOD 안내 배지 (모바일 90% 확장 시트에서는 가림 충돌 방지) */}
+      {plan.lod && !(layout === "mobile" && sheetSnap === 2) && (
+        <div className="lod-chip" role="status" aria-live="polite" style={lodChipStyle}>
           성능 보호 모드 · 폴리곤 {plan.rawPolygonCount.toLocaleString()}개(상한 {limit}개 초과)로{" "}
           {plan.active === "sido" ? "시·도" : "시·군·구"} 단위 병합 표시
         </div>

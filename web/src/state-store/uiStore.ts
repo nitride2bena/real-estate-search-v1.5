@@ -10,6 +10,10 @@ export interface UiStore {
   setSheetSnap(v: 0 | 1 | 2): void;
   resultsOpen: boolean;
   setResultsOpen(v: boolean): void;
+  compareOpen: boolean;
+  setCompareOpen(v: boolean): void;
+  bookmarksOpen: boolean;
+  setBookmarksOpen(v: boolean): void;
   miniCard: { feature: RegionFeature; level: "sido" | "sigungu" | "emd" } | null;
   setMiniCard(v: UiStore["miniCard"]): void;
   /** Dynamic FitBounds 용 패널 가림 영역 */
@@ -42,18 +46,24 @@ function getInitialMapPadding(drawerOpen: boolean) {
   return { top: 20, right: 20, bottom: Math.round(h * 0.5) + 20, left: 20 };
 }
 
+const initialDrawerOpen = !isInitialTabletPortrait();
+
 export const useUiStore = create<UiStore>((set) => ({
   toast: null,
   showToast: (text) => set({ toast: { id: ++toastId, text } }),
-  // 사용자 사용성 보장: 기본 상태는 항상 패널 열림(true) 상태로 유지
-  drawerOpen: true,
+  // DRD 3.1 — 태블릿 세로 모드(768~1023px, h > w) 초기 진입 시 드로어 기본 접힘, 그 외에는 열림
+  drawerOpen: initialDrawerOpen,
   setDrawerOpen: (drawerOpen) => set({ drawerOpen }),
   sheetSnap: 1,
   setSheetSnap: (sheetSnap) => set({ sheetSnap }),
   resultsOpen: false,
   setResultsOpen: (resultsOpen) => set({ resultsOpen }),
+  compareOpen: false,
+  setCompareOpen: (compareOpen) => set({ compareOpen }),
+  bookmarksOpen: false,
+  setBookmarksOpen: (bookmarksOpen) => set({ bookmarksOpen }),
   miniCard: null,
   setMiniCard: (miniCard) => set({ miniCard }),
-  mapPadding: getInitialMapPadding(true),
+  mapPadding: getInitialMapPadding(initialDrawerOpen),
   setMapPadding: (mapPadding) => set({ mapPadding }),
 }));

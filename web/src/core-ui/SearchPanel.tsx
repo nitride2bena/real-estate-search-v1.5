@@ -1,10 +1,13 @@
 import React, { useEffect, useRef } from "react";
+import { toUnifiedSearchSchema } from "../domain/platformLinks";
 import { useRegionStore } from "../state-store/regionStore";
 import { useFilterStore, activeFilterCount } from "../state-store/filterStore";
+import { useBookmarkStore } from "../state-store/bookmarkStore";
 import { useUiStore } from "../state-store/uiStore";
 import { Stepper, SidoStep, SigunguStep, EmdStep } from "./RegionSteps";
 import { FilterTab } from "./FilterTab";
 import { ActionBar } from "./ActionBar";
+import { copyTextToClipboard } from "./clipboard";
 import {
   shareSearchUrl,
   type LayoutMode,
@@ -18,12 +21,15 @@ export function SearchPanel({ layout }: { layout: LayoutMode }) {
   const { tab, setTab, step, selectedSidoCodes, selectedSigunguCodes } =
     useRegionStore();
   const filters = useFilterStore();
+  const bookmarksCount = useBookmarkStore((s) => s.bookmarks.length);
+  const compareCount = useBookmarkStore((s) => s.compareIds.length);
   const {
     drawerOpen,
     setDrawerOpen,
     sheetSnap,
     setSheetSnap,
     setResultsOpen,
+    setCompareOpen,
     setMapPadding,
     showToast,
   } = useUiStore();
@@ -150,8 +156,56 @@ export function SearchPanel({ layout }: { layout: LayoutMode }) {
         </button>
       )}
 
-      {/* DRD 4.1: 상단 메인 탭 + 우측 검색 조건 URL 공유 버튼 (FR-17) */}
+      {/* DRD 4.1: v1.6 브랜딩 + 북마크/스키마 진입 + 상단 메인 탭 + URL 공유 버튼 (FR-17) */}
       <header className="panel-header">
+        <div className="panel-brand-row">
+          <div className="brand-title-wrap">
+            <span className="brand-title">부동산 검색조건</span>
+            <span className="version-badge" aria-label="버전 1.6">
+              v1.6
+            </span>
+          </div>
+          <div className="brand-actions">
+            <button
+              type="button"
+              className={`btn-header-pill ${bookmarksCount > 0 ? "has-items" : ""}`}
+              aria-label={`관심 매물 ${bookmarksCount}건 비교 모달 열기`}
+              title="관심 매물 북마크 및 비교함 열기"
+              onClick={() => setCompareOpen(true)}
+            >
+              <span aria-hidden="true">★</span>
+              <span>관심</span>
+              <span className="bookmark-count-badge tnum">
+                {bookmarksCount}
+                {compareCount > 0 ? `·비교${compareCount}` : ""}
+              </span>
+            </button>
+            <button
+              type="button"
+              className="btn-header-pill"
+              aria-label="통합 검색 스키마 JSON 복사"
+              title="현재 지역·조건 통합 검색 스키마(JSON) 복사"
+              onClick={async () => {
+                const schema = toUnifiedSearchSchema(
+                  useRegionStore.getState(),
+                  useFilterStore.getState(),
+                );
+                const ok = await copyTextToClipboard(
+                  JSON.stringify(schema, null, 2),
+                );
+                showToast(
+                  ok
+                    ? "통합 검색 스키마(JSON)를 복사했습니다"
+                    : "스키마 복사에 실패했습니다",
+                );
+              }}
+            >
+              <span aria-hidden="true">📋</span>
+              <span>JSON</span>
+            </button>
+          </div>
+        </div>
+
         <div className="header-top-row">
           <div className="main-tabs" role="tablist" aria-label="검색 조건 구분">
             <button

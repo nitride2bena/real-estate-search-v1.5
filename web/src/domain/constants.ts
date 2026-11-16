@@ -20,6 +20,78 @@ export const TRADE_TYPES: { value: TradeType; label: string }[] = [
   { value: "MONTHLY", label: "월세" },
 ];
 
+export const TRADE_LABEL: Record<Exclude<TradeType, "ALL">, string> = {
+  SALE: "매매",
+  JEONSE: "전세",
+  MONTHLY: "월세",
+};
+
+/** 국토교통부 표준 법정동 시도 코드(2자리) → 단축 시·도 명칭 맵 (sido.json v20261001 12/51/52 및 구코드 29/42/45/46 하위호환 포함) */
+export const SIDO_NAME_MAP: Record<string, string> = {
+  "11": "서울",
+  "12": "전남광주",
+  "26": "부산",
+  "27": "대구",
+  "28": "인천",
+  "29": "광주",
+  "30": "대전",
+  "31": "울산",
+  "36": "세종",
+  "41": "경기",
+  "42": "강원",
+  "43": "충북",
+  "44": "충남",
+  "45": "전북",
+  "46": "전남",
+  "47": "경북",
+  "48": "경남",
+  "50": "제주",
+  "51": "강원",
+  "52": "전북",
+};
+
+/** 통합 코드 `12` 내 광주광역시 자치구 시·군·구 코드(5자리) */
+export const GWANGJU_SIGUNGU_CODES = new Set([
+  "12210", // 동구
+  "12240", // 서구
+  "12270", // 남구
+  "12300", // 북구
+  "12330", // 광산구
+]);
+
+const GWANGJU_SIGUNGU_NAMES = new Set(["광산구", "남구", "동구", "북구", "서구"]);
+
+/**
+ * 법정동(8/10자리)·시군구(5자리)·시도(2자리) 코드와 선택적 주소 힌트로 시·도 약칭을 반환합니다.
+ * 통합 코드 `12`(전남광주)는 시군구 코드(12210~12330) 또는 주소 힌트로 "광주" vs "전남"을 판별합니다.
+ */
+export function getSidoShortName(bjdOrSidoCode: string, addressHint?: string): string {
+  const code = (bjdOrSidoCode ?? "").trim();
+  const sidoCode = code.slice(0, 2);
+  if (!sidoCode) return "";
+  if (sidoCode !== "12") return SIDO_NAME_MAP[sidoCode] ?? "";
+
+  if (code.length >= 5) {
+    const sggCode = code.slice(0, 5);
+    if (GWANGJU_SIGUNGU_CODES.has(sggCode)) return "광주";
+    const numeric = Number(sggCode);
+    if (Number.isInteger(numeric) && numeric >= 12210 && numeric <= 12330) return "광주";
+    return "전남";
+  }
+
+  const hint = (addressHint ?? "").trim();
+  if (hint) {
+    if (hint.startsWith("전남광주")) return "전남광주";
+    if (hint.includes("전남") || hint.includes("전라남도")) return "전남";
+    if (hint.includes("광주")) return "광주";
+    const firstToken = hint.split(/\s+/)[0] ?? "";
+    if (GWANGJU_SIGUNGU_NAMES.has(firstToken)) return "광주";
+    return "전남";
+  }
+
+  return SIDO_NAME_MAP["12"];
+}
+
 // FR-06 — 국토계획법 용도지역 7대 대분류 + 세분류 (토지이음 용도지역 코드 체계)
 export interface ZoneGroup {
   key: string;

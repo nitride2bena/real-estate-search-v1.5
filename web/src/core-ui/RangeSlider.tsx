@@ -35,6 +35,7 @@ export function RangeSlider({
 
   const [lo, setLo] = useState(() => toIdx(value.min, 0));
   const [hi, setHi] = useState(() => toIdx(value.max, last));
+  const [activeThumb, setActiveThumb] = useState<"lo" | "hi" | null>(null);
   const draggingRef = useRef(false);
 
   useEffect(() => {
@@ -53,6 +54,11 @@ export function RangeSlider({
   };
 
   const pct = (i: number) => (i / last) * 100;
+  // 두 thumb가 우측 끝(lo === hi === last) 등 상반부에서 겹칠 때 하한 슬라이더를 우선 조작 가능하도록 z-index 조정
+  const loOnTop = activeThumb === "lo" || (activeThumb !== "hi" && lo === hi && lo > last / 2);
+  const loZ = loOnTop ? 4 : 2;
+  const hiZ = activeThumb === "hi" ? 5 : 3;
+
   const text =
     lo === 0 && hi === last
       ? "전체"
@@ -93,9 +99,11 @@ export function RangeSlider({
           max={last}
           step={1}
           value={lo}
+          style={{ zIndex: loZ }}
           aria-label={`${label} 최소`}
           onPointerDown={() => {
             draggingRef.current = true;
+            setActiveThumb("lo");
           }}
           onChange={(e) => {
             const nextLo = Math.min(Number(e.target.value), hi);
@@ -104,15 +112,18 @@ export function RangeSlider({
           }}
           onPointerUp={() => {
             draggingRef.current = false;
+            setActiveThumb(null);
             commit(lo, hi);
           }}
           onTouchEnd={() => {
             draggingRef.current = false;
+            setActiveThumb(null);
             commit(lo, hi);
           }}
           onKeyUp={() => commit(lo, hi)}
           onBlur={() => {
             draggingRef.current = false;
+            setActiveThumb(null);
             commit(lo, hi);
           }}
         />
@@ -122,9 +133,11 @@ export function RangeSlider({
           max={last}
           step={1}
           value={hi}
+          style={{ zIndex: hiZ }}
           aria-label={`${label} 최대`}
           onPointerDown={() => {
             draggingRef.current = true;
+            setActiveThumb("hi");
           }}
           onChange={(e) => {
             const nextHi = Math.max(Number(e.target.value), lo);
@@ -133,15 +146,18 @@ export function RangeSlider({
           }}
           onPointerUp={() => {
             draggingRef.current = false;
+            setActiveThumb(null);
             commit(lo, hi);
           }}
           onTouchEnd={() => {
             draggingRef.current = false;
+            setActiveThumb(null);
             commit(lo, hi);
           }}
           onKeyUp={() => commit(lo, hi)}
           onBlur={() => {
             draggingRef.current = false;
+            setActiveThumb(null);
             commit(lo, hi);
           }}
         />

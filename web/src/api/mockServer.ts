@@ -46,6 +46,28 @@ export interface CountResponse {
   clusters: { bjd_code: string; count: number }[];
 }
 
+export type SearchSort = "ppp_asc" | "price_asc" | "price_desc" | "area_desc";
+
+export interface SearchRequest extends CountRequest {
+  limit?: number;
+  offset?: number;
+  sort?: SearchSort;
+}
+
+export interface SearchOptions {
+  limit?: number;
+  offset?: number;
+  sort?: SearchSort;
+}
+
+export interface SearchResponse {
+  total_count: number;
+  items: Property[];
+  has_more: boolean;
+  offset: number;
+  limit: number;
+}
+
 // ---------- 결정론적 난수 ----------
 function hash(str: string): number {
   let h = 2166136261;
@@ -211,9 +233,58 @@ export async function postCount(req: CountRequest, signal?: AbortSignal): Promis
   return { total_count: rows.length, clusters: [...m].map(([bjd_code, count]) => ({ bjd_code, count })) };
 }
 
+function sortProperties(rows: Property[], sort: SearchSort): Property[] {
+  const copy = [...rows];
+  copy.sort((a, b) => {
+    let diff = 0;
+    if (sort === "price_asc") diff = a.price - b.price;
+    else if (sort === "price_desc") diff = b.price - a.price;
+    else if (sort === "area_desc") diff = b.land_area_sqm - a.land_area_sqm;
+    else diff = a.price_per_pyeong - b.price_per_pyeong;
+    return diff !== 0 ? diff : a.property_id - b.property_id;
+  });
+  return copy;
+}
+
 /** POST /api/v1/properties/search */
-export async function postSearch(req: CountRequest, limit = 100, signal?: AbortSignal) {
+export async function postSearch(req: SearchRequest, signal?: AbortSignal): Promise<SearchResponse>;
+export async function postSearch(
+  req: SearchRequest | CountRequest,
+  limitOrOptions?: number | SearchOptions,
+  signal?: AbortSignal,
+): Promise<SearchResponse>;
+export async function postSearch(
+  req: SearchRequest | CountRequest,
+  limitOrOptionsOrSignal?: number | SearchOptions | AbortSignal,
+  maybeSignal?: AbortSignal,
+): Promise<SearchResponse> {
+  let limit = (req as SearchRequest).limit ?? 100;
+  let offset = (req as SearchRequest).offset ?? 0;
+  let sort: SearchSort = (req as SearchRequest).sort ?? "ppp_asc";
+  let signal = maybeSignal;
+
+  if (typeof limitOrOptionsOrSignal === "number") {
+    limit = limitOrOptionsOrSignal;
+  } else if (limitOrOptionsOrSignal && "aborted" in limitOrOptionsOrSignal) {
+    signal = limitOrOptionsOrSignal;
+  } else if (limitOrOptionsOrSignal) {
+    if (limitOrOptionsOrSignal.limit != null) limit = limitOrOptionsOrSignal.limit;
+    if (limitOrOptionsOrSignal.offset != null) offset = limitOrOptionsOrSignal.offset;
+    if (limitOrOptionsOrSignal.sort) sort = limitOrOptionsOrSignal.sort;
+  }
+
   const [rows] = await Promise.all([query(req), latency(signal, 250)]);
-  const sorted = [...rows].sort((a, b) => a.price_per_pyeong - b.price_per_pyeong);
-  return { total_count: rows.length, items: sorted.slice(0, limit) };
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+
+  const sorted = sortProperties(rows, sort);
+  const safeOffset = Math.max(0, Math.floor(offset));
+  const safeLimit = Math.max(1, Math.floor(limit));
+  const items = sorted.slice(safeOffset, safeOffset + safeLimit);
+  return {
+    total_count: rows.length,
+    items,
+    has_more: safeOffset + items.length < rows.length,
+    offset: safeOffset,
+    limit: safeLimit,
+  };
 }

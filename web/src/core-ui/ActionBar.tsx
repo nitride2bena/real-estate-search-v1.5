@@ -36,6 +36,7 @@ export function useLiveCount() {
   const filters = useFilterStore();
   const setCount = useCountStore((s) => s.set);
   const q = buildRegionQuery(region);
+  const [retrySeq, setRetrySeq] = useState(0);
 
   // 선택된 시·군·구가 있을 때 모든 시·군·구의 하위 읍·면·동이 해제된 경우 판별
   const allSigunguEmdCleared =
@@ -70,9 +71,11 @@ export function useLiveCount() {
     }, 300);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key]);
+  }, [key, retrySeq]);
 
-  return { ...q, empty: isEmptySelection };
+  const retry = () => setRetrySeq((n) => n + 1);
+
+  return { ...q, empty: isEmptySelection, retry };
 }
 
 export function ActionBar({ onSearch }: { onSearch: () => void }) {
@@ -112,6 +115,8 @@ export function ActionBar({ onSearch }: { onSearch: () => void }) {
     tone = "warn";
   } else if (status === "error") {
     label = "건수를 불러오지 못했습니다 · 다시 시도";
+    action = q.retry;
+    tone = "warn";
   } else {
     label = (
       <>

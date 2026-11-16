@@ -1,226 +1,169 @@
-import { useEffect, useMemo, useState } from "react";
-import * as XLSX from "xlsx";
-import { postSearch, type Property } from "../api/mockServer";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  postSearch,
+  type Property,
+  type SearchSort,
+} from "../api/mockServer";
 import {
   BUILDING_USE_LABEL,
   SQM_PER_PYEONG,
+  TRADE_LABEL,
   ZONE_LABEL,
   formatMoney,
+  type TradeType,
 } from "../domain/constants";
+import {
+  formatPropertyShareText,
+  getPropertyLinks,
+} from "../domain/platformLinks";
+import { MAX_COMPARE_COUNT, useBookmarkStore } from "../state-store/bookmarkStore";
 import { buildCountRequest, useFilterStore } from "../state-store/filterStore";
 import { buildRegionQuery, useRegionStore } from "../state-store/regionStore";
 import { useUiStore } from "../state-store/uiStore";
+import { copyTextToClipboard } from "./clipboard";
+import { exportPropertiesToExcel } from "./excelExport";
 
-const TRADE_LABEL = { SALE: "매매", JEONSE: "전세", MONTHLY: "월세" } as const;
-type SortKey = "ppp_asc" | "price_asc" | "area_desc";
+const PAGE_SIZE = 50;
 
-const SIDO_NAME_MAP: Record<string, string> = {
-  "11": "서울",
-  "26": "부산",
-  "27": "대구",
-  "28": "인천",
-  "29": "광주",
-  "30": "대전",
-  "31": "울산",
-  "36": "세종",
-  "41": "경기",
-  "42": "강원",
-  "43": "충북",
-  "44": "충남",
-  "45": "전북",
-  "46": "전남",
-  "47": "경북",
-  "48": "경남",
-  "50": "제주",
-};
-
-function getFullAddress(p: Property): {
-  fullAddress: string;
-  dongAddress: string;
-  naverQuery: string;
-  naverLandUrl: string;
-  cadastralUrl: string;
-  valuemapUrl: string;
-  kakaoMapUrl: string;
-} {
-  const sidoPrefix = SIDO_NAME_MAP[p.bjd_code.slice(0, 2)] ?? "";
-  const fullAddress = sidoPrefix ? `${sidoPrefix} ${p.address}` : p.address;
-  const parts = p.address.split(" ");
-  const sigungu = parts[0] || "";
-  const dongRaw = parts[1] || "";
-  const dongClean = dongRaw.replace(/(\d+)동$/, "동");
-  const naverQuery = sigungu && dongClean ? `${sigungu} ${dongClean}` : p.address;
-  const dongAddress = sidoPrefix ? `${sidoPrefix} ${sigungu} ${dongClean}` : naverQuery;
-
-  // 공식 네이버페이 부동산 단지/매물 검색 URL (PC 및 모바일 완벽 호환)
-  const naverLandUrl = `https://fin.land.naver.com/search?q=${encodeURIComponent(naverQuery)}`;
-  const cadastralUrl = `https://map.naver.com/p/search/${encodeURIComponent(fullAddress)}?c=17.00,0,0,0,cadastral`;
-  const valuemapUrl = `https://www.valueupmap.com/search?q=${encodeURIComponent(fullAddress)}`;
-  const kakaoMapUrl = `https://map.kakao.com/?q=${encodeURIComponent(fullAddress)}`;
-
-  return {
-    fullAddress,
-    dongAddress,
-    naverQuery,
-    naverLandUrl,
-    cadastralUrl,
-    valuemapUrl,
-    kakaoMapUrl,
-  };
-}
-
-/** 검색된 매물 목록 엑셀(.xlsx) 생성 및 다운로드 (네이버부동산 및 지적도/밸류맵 링크 포함) */
-function exportToExcel(items: Property[]) {
-  if (!items || items.length === 0) return;
-
-  const rows = items.map((p, idx) => {
-    const {
-      fullAddress,
-      naverLandUrl,
-      cadastralUrl,
-      valuemapUrl,
-      kakaoMapUrl,
-    } = getFullAddress(p);
-
-    const landPyeong = Math.round(p.land_area_sqm / SQM_PER_PYEONG);
-    const bldgPyeong =
-      p.building_area_sqm > 0
-        ? Math.round(p.building_area_sqm / SQM_PER_PYEONG)
-        : 0;
-
-    return {
-      연번: idx + 1,
-      소재지_주소: fullAddress,
-      거래유형: TRADE_LABEL[p.trade_type],
-      "가격(만원)": p.price,
-      "월세(만원)": p.monthly_rent > 0 ? p.monthly_rent : 0,
-      "평당가(만원)": p.price_per_pyeong,
-      "대지면적(㎡)": Math.round(p.land_area_sqm),
-      "대지면적(평)": landPyeong,
-      "연면적(㎡)":
-        p.building_area_sqm > 0 ? Math.round(p.building_area_sqm) : 0,
-      "연면적(평)": bldgPyeong,
-      용도지역: p.land_use_zones.map((z) => ZONE_LABEL[z] ?? z).join(", "),
-      건축물주용도:
-        BUILDING_USE_LABEL[p.building_main_use] ?? p.building_main_use,
-      네이버부동산_링크: naverLandUrl,
-      지적편집도_링크: cadastralUrl,
-      밸류맵실거래_링크: valuemapUrl,
-      카카오맵_링크: kakaoMapUrl,
-    };
-  });
-
-  const ws = XLSX.utils.json_to_sheet(rows);
-
-  // 셀 하이퍼링크 객체 부여 (엑셀 내 클릭 시 바로 브라우저 오픈)
-  const range = XLSX.utils.decode_range(ws["!ref"] || "A1:A1");
-  for (let R = 1; R <= range.e.r; ++R) {
-    const p = items[R - 1];
-    if (!p) continue;
-    const {
-      naverLandUrl,
-      cadastralUrl,
-      valuemapUrl,
-      kakaoMapUrl,
-    } = getFullAddress(p);
-
-    // 컬럼 12: 네이버부동산, 13: 지적도, 14: 밸류맵, 15: 카카오맵
-    const naverCell = XLSX.utils.encode_cell({ r: R, c: 12 });
-    if (ws[naverCell]) {
-      ws[naverCell].l = {
-        Target: naverLandUrl,
-        Tooltip: "네이버페이 부동산 매물/단지 지도 바로가기",
-      };
-    }
-    const cadastralCell = XLSX.utils.encode_cell({ r: R, c: 13 });
-    if (ws[cadastralCell]) {
-      ws[cadastralCell].l = {
-        Target: cadastralUrl,
-        Tooltip: "네이버 지도 지적편집도 바로가기",
-      };
-    }
-    const valuemapCell = XLSX.utils.encode_cell({ r: R, c: 14 });
-    if (ws[valuemapCell]) {
-      ws[valuemapCell].l = {
-        Target: valuemapUrl,
-        Tooltip: "밸류맵 토지·건물 실거래가 바로가기",
-      };
-    }
-    const kakaoCell = XLSX.utils.encode_cell({ r: R, c: 15 });
-    if (ws[kakaoCell]) {
-      ws[kakaoCell].l = {
-        Target: kakaoMapUrl,
-        Tooltip: "카카오맵 위치 및 로드뷰 바로가기",
-      };
-    }
-  }
-
-  // 가독성을 위한 열 너비 지정
-  ws["!cols"] = [
-    { wch: 6 }, // 연번
-    { wch: 30 }, // 소재지_주소
-    { wch: 10 }, // 거래유형
-    { wch: 14 }, // 가격
-    { wch: 12 }, // 월세
-    { wch: 14 }, // 평당가
-    { wch: 14 }, // 대지면적(㎡)
-    { wch: 14 }, // 대지면적(평)
-    { wch: 14 }, // 연면적(㎡)
-    { wch: 14 }, // 연면적(평)
-    { wch: 20 }, // 용도지역
-    { wch: 16 }, // 건축물주용도
-    { wch: 42 }, // 네이버부동산_링크
-    { wch: 42 }, // 지적편집도_링크
-    { wch: 42 }, // 밸류맵실거래_링크
-    { wch: 42 }, // 카카오맵_링크
-  ];
-
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "부동산매물목록");
-
-  const now = new Date();
-  const dateStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}_${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
-  XLSX.writeFile(wb, `부동산_검색매물목록_${dateStr}.xlsx`);
-}
+const MODAL_TRADE_FILTERS: Array<{ value: TradeType; label: string }> = [
+  { value: "ALL", label: "전체" },
+  { value: "SALE", label: "매매" },
+  { value: "JEONSE", label: "전세" },
+  { value: "MONTHLY", label: "월세" },
+];
 
 export function ResultsModal() {
   const open = useUiStore((s) => s.resultsOpen);
   const setOpen = useUiStore((s) => s.setResultsOpen);
+  const setCompareOpen = useUiStore((s) => s.setCompareOpen);
   const showToast = useUiStore((s) => s.showToast);
-  const [data, setData] = useState<{
-    total_count: number;
-    items: Property[];
-  } | null>(null);
-  const [sortBy, setSortBy] = useState<SortKey>("ppp_asc");
+
+  const {
+    bookmarks,
+    compareIds,
+    toggleBookmark,
+    toggleCompare,
+    isBookmarked,
+    isCompared,
+  } = useBookmarkStore();
+
+  const [items, setItems] = useState<Property[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [sortBy, setSortBy] = useState<SearchSort>("ppp_asc");
+  const [retrySeq, setRetrySeq] = useState(0);
+
+  // 모달 내부 빠른 필터
+  const [tradeFilter, setTradeFilter] = useState<TradeType>("ALL");
+  const [keyword, setKeyword] = useState("");
+  const [bookmarkOnly, setBookmarkOnly] = useState(false);
+  const [expandedLinks, setExpandedLinks] = useState<Record<number, boolean>>({});
+
+  const ctrlRef = useRef<AbortController | null>(null);
+
+  const fetchPage = useCallback(
+    async (offset: number, append: boolean, sort: SearchSort) => {
+      ctrlRef.current?.abort();
+      const c = new AbortController();
+      ctrlRef.current = c;
+
+      if (append) {
+        setLoadingMore(true);
+      } else {
+        setStatus("loading");
+      }
+
+      try {
+        const req = buildCountRequest(
+          buildRegionQuery(useRegionStore.getState()),
+          useFilterStore.getState(),
+        );
+        const res = await postSearch(
+          req,
+          { limit: PAGE_SIZE, offset, sort },
+          c.signal,
+        );
+        if (c.signal.aborted) return;
+        setItems((prev) => (append ? [...prev, ...res.items] : res.items));
+        setTotalCount(res.total_count);
+        setHasMore(res.has_more);
+        setStatus("ready");
+      } catch (e) {
+        if ((e as Error).name !== "AbortError") {
+          setStatus("error");
+        }
+      } finally {
+        if (!c.signal.aborted) {
+          setLoadingMore(false);
+        }
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
-    if (!open) return;
-    setData(null);
-    const c = new AbortController();
-    const req = buildCountRequest(
-      buildRegionQuery(useRegionStore.getState()),
-      useFilterStore.getState(),
-    );
-    postSearch(req, 100, c.signal)
-      .then(setData)
-      .catch(() => {});
-    return () => c.abort();
-  }, [open]);
-
-  const sortedItems = useMemo(() => {
-    if (!data?.items) return [];
-    const copy = [...data.items];
-    if (sortBy === "price_asc") {
-      copy.sort((a, b) => a.price - b.price);
-    } else if (sortBy === "area_desc") {
-      copy.sort((a, b) => b.land_area_sqm - a.land_area_sqm);
-    } else {
-      copy.sort((a, b) => a.price_per_pyeong - b.price_per_pyeong);
+    if (!open) {
+      ctrlRef.current?.abort();
+      return;
     }
-    return copy;
-  }, [data, sortBy]);
+    setItems([]);
+    setTotalCount(0);
+    setHasMore(false);
+    void fetchPage(0, false, sortBy);
+    return () => {
+      ctrlRef.current?.abort();
+    };
+  }, [open, sortBy, retrySeq, fetchPage]);
+
+  const bookmarkIdSet = useMemo(
+    () => new Set(bookmarks.map((b) => b.property_id)),
+    [bookmarks],
+  );
+
+  const filteredItems = useMemo(() => {
+    const q = keyword.trim().toLowerCase();
+    return items.filter((p) => {
+      if (tradeFilter !== "ALL" && p.trade_type !== tradeFilter) return false;
+      if (bookmarkOnly && !bookmarkIdSet.has(p.property_id)) return false;
+      if (q) {
+        const links = getPropertyLinks(p);
+        const zoneText = p.land_use_zones
+          .map((z) => ZONE_LABEL[z] ?? z)
+          .join(" ");
+        const useText =
+          BUILDING_USE_LABEL[p.building_main_use] ?? p.building_main_use;
+        const haystack =
+          `${links.fullAddress} ${p.emd_name} ${zoneText} ${useText}`.toLowerCase();
+        if (!haystack.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [items, tradeFilter, bookmarkOnly, bookmarkIdSet, keyword]);
 
   if (!open) return null;
+
+  const handleToggleCompare = (p: Property) => {
+    const alreadyCompared = isCompared(p.property_id);
+    if (!alreadyCompared && compareIds.length >= MAX_COMPARE_COUNT) {
+      showToast(`비교함은 최대 ${MAX_COMPARE_COUNT}건까지 담을 수 있습니다`);
+      return;
+    }
+    if (!alreadyCompared && !isBookmarked(p.property_id)) {
+      toggleBookmark(p);
+    }
+    const ok = toggleCompare(p.property_id);
+    if (!ok) {
+      showToast(`비교함은 최대 ${MAX_COMPARE_COUNT}건까지 담을 수 있습니다`);
+      return;
+    }
+    showToast(
+      alreadyCompared
+        ? "비교함에서 제외했습니다"
+        : "비교함에 담았습니다 (관심 매물 자동 저장)",
+    );
+  };
 
   return (
     <div className="modal-backdrop" onClick={() => setOpen(false)}>
@@ -233,35 +176,72 @@ export function ResultsModal() {
       >
         <header className="modal-head">
           <div>
-            <h2>검색 결과</h2>
+            <h2>
+              검색 결과
+              <span className="version-badge">v1.6</span>
+            </h2>
             <p className="tnum">
-              {data
-                ? `총 ${data.total_count.toLocaleString()}건 · 상위 ${data.items.length}건 표시`
-                : "불러오는 중…"}
+              {status === "loading"
+                ? "매물 데이터를 불러오는 중…"
+                : status === "error"
+                  ? "조회에 실패했습니다"
+                  : `총 ${totalCount.toLocaleString()}건 중 ${items.length.toLocaleString()}건 로드 · 표시 ${filteredItems.length.toLocaleString()}건`}
             </p>
           </div>
           <div className="modal-head-actions">
             <button
               type="button"
-              className="btn-export-excel"
-              disabled={!sortedItems.length}
+              className="btn-header-pill"
               onClick={() => {
-                exportToExcel(sortedItems);
-                showToast(`엑셀 파일(${sortedItems.length}건)을 다운로드했습니다`);
+                setOpen(false);
+                setCompareOpen(true);
               }}
-              title="검색된 매물 목록 엑셀(.xlsx) 다운로드 (네이버부동산 및 지적도 링크 포함)"
+              title="관심 매물 및 비교함 열기"
+            >
+              <span>★ 비교함</span>
+              <span className="bookmark-count-badge tnum">
+                {compareIds.length}/{MAX_COMPARE_COUNT}
+              </span>
+            </button>
+            <button
+              type="button"
+              className="btn-export-excel"
+              disabled={!filteredItems.length}
+              onClick={() => {
+                const n = exportPropertiesToExcel(filteredItems);
+                showToast(`검색 매물 엑셀(${n}건)을 다운로드했습니다`);
+              }}
+              title="현재 목록 엑셀(.xlsx) 다운로드 (16컬럼 + 플랫폼 링크)"
             >
               <span aria-hidden="true">📥</span>
               <span>엑셀 다운로드</span>
             </button>
+            {bookmarks.length > 0 && (
+              <button
+                type="button"
+                className="btn-export-excel"
+                onClick={() => {
+                  const n = exportPropertiesToExcel(
+                    bookmarks,
+                    "부동산_관심매물목록",
+                  );
+                  showToast(`북마크 매물 엑셀(${n}건)을 다운로드했습니다`);
+                }}
+                title="저장된 관심 매물만 엑셀(.xlsx)로 내보내기"
+              >
+                <span aria-hidden="true">★</span>
+                <span>북마크 엑셀 ({bookmarks.length})</span>
+              </button>
+            )}
             <select
               className="modal-sort-select"
               aria-label="정렬 기준"
               value={sortBy}
-              onChange={(e) => setSortBy(e.target.value as SortKey)}
+              onChange={(e) => setSortBy(e.target.value as SearchSort)}
             >
               <option value="ppp_asc">평당가 낮은 순</option>
               <option value="price_asc">가격 낮은 순</option>
+              <option value="price_desc">가격 높은 순</option>
               <option value="area_desc">대지면적 넓은 순</option>
             </select>
             <button
@@ -275,104 +255,258 @@ export function ResultsModal() {
           </div>
         </header>
 
+        {/* 모달 내부 필터 툴바 */}
+        <div className="modal-toolbar">
+          <div className="modal-toolbar-row">
+            <input
+              type="search"
+              className="modal-search-input"
+              placeholder="결과 내 주소·동·용도지역 검색…"
+              aria-label="결과 내 키워드 검색"
+              value={keyword}
+              onChange={(e) => setKeyword(e.target.value)}
+            />
+            <div className="modal-filter-pills" role="group" aria-label="거래유형 빠른 필터">
+              {MODAL_TRADE_FILTERS.map((t) => (
+                <button
+                  key={t.value}
+                  type="button"
+                  aria-pressed={tradeFilter === t.value}
+                  className={`modal-pill ${tradeFilter === t.value ? "is-on" : ""}`}
+                  onClick={() => setTradeFilter(t.value)}
+                >
+                  {t.label}
+                </button>
+              ))}
+              <button
+                type="button"
+                aria-pressed={bookmarkOnly}
+                className={`modal-pill ${bookmarkOnly ? "is-bookmark-on" : ""}`}
+                onClick={() => setBookmarkOnly((v) => !v)}
+              >
+                ★ 북마크만
+              </button>
+            </div>
+          </div>
+        </div>
+
         <ul className="result-list">
-          {!data &&
+          {status === "loading" &&
             Array.from({ length: 6 }, (_, i) => (
               <li key={i} className="skeleton result-skel" />
             ))}
-          {data && sortedItems.length === 0 && (
-            <li className="empty-filter-msg">
-              조건에 맞는 매물이 없습니다.
+
+          {status === "error" && (
+            <li className="modal-error-box">
+              <span>매물 목록을 불러오는 중 오류가 발생했습니다.</span>
+              <button
+                type="button"
+                className="btn-retry"
+                onClick={() => setRetrySeq((n) => n + 1)}
+              >
+                ↻ 다시 시도
+              </button>
             </li>
           )}
-          {sortedItems.map((p) => (
-            <li key={p.property_id} className="result-card">
-              <div className="result-top">
-                <span className={`trade trade-${p.trade_type}`}>
-                  {TRADE_LABEL[p.trade_type]}
-                </span>
-                <strong className="tnum">
-                  {p.trade_type === "MONTHLY"
-                    ? `${formatMoney(p.price)} / 월 ${formatMoney(p.monthly_rent)}`
-                    : formatMoney(p.price)}
-                </strong>
-                <span className="result-ppp tnum">
-                  평당 {formatMoney(p.price_per_pyeong)}
-                </span>
-              </div>
-              <div className="result-addr">{p.address}</div>
-              <div className="result-meta tnum">
-                대지 {Math.round(p.land_area_sqm).toLocaleString()}㎡ (
-                {Math.round(p.land_area_sqm / SQM_PER_PYEONG).toLocaleString()}
-                평)
-                {p.building_area_sqm > 0 &&
-                  ` · 연면적 ${Math.round(p.building_area_sqm).toLocaleString()}㎡ (${Math.round(p.building_area_sqm / SQM_PER_PYEONG).toLocaleString()}평)`}
-                {` · ${BUILDING_USE_LABEL[p.building_main_use] ?? p.building_main_use}`}
-              </div>
-              <div className="result-tags">
-                {p.land_use_zones.map((z) => (
-                  <span key={z} className="tag">
-                    {ZONE_LABEL[z] ?? z}
-                  </span>
-                ))}
-              </div>
 
-              {/* 매물 원본 정보 조회 외부 링크 모음 */}
-              {(() => {
-                const {
-                  naverLandUrl,
-                  cadastralUrl,
-                  valuemapUrl,
-                  kakaoMapUrl,
-                } = getFullAddress(p);
-                return (
-                  <div className="result-links">
-                    <span className="links-title">원래 정보 조회:</span>
-                    <a
-                      href={naverLandUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="link-chip link-naver"
-                      title="네이버페이 부동산 매물 및 단지 지도 (새 창)"
-                    >
-                      네이버 부동산 ↗
-                    </a>
-                    <a
-                      href={cadastralUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="link-chip link-cadastral"
-                      title="네이버 지도 지적편집도 및 필지 경계선 조회 (새 창)"
-                    >
-                      지적편집도 ↗
-                    </a>
-                    <a
-                      href={valuemapUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="link-chip link-valuemap"
-                      title="밸류맵 토지·건물 실거래가 및 토지이용계획 조회 (새 창)"
-                    >
-                      밸류맵 실거래 ↗
-                    </a>
-                    <a
-                      href={kakaoMapUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="link-chip link-kakao"
-                      title="카카오맵 위치 및 로드뷰 (새 창)"
-                    >
-                      카카오맵 ↗
-                    </a>
-                  </div>
-                );
-              })()}
+          {status === "ready" && filteredItems.length === 0 && (
+            <li className="empty-filter-msg">
+              {items.length === 0
+                ? "조건에 맞는 매물이 없습니다."
+                : "현재 모달 내 필터 조건에 일치하는 매물이 없습니다."}
             </li>
-          ))}
+          )}
+
+          {filteredItems.map((p) => {
+            const links = getPropertyLinks(p);
+            const bookmarked = isBookmarked(p.property_id);
+            const compared = isCompared(p.property_id);
+            const showExtraLinks = Boolean(expandedLinks[p.property_id]);
+
+            return (
+              <li key={p.property_id} className="result-card">
+                <div className="result-top">
+                  <span className={`trade trade-${p.trade_type}`}>
+                    {TRADE_LABEL[p.trade_type]}
+                  </span>
+                  <strong className="tnum">
+                    {p.trade_type === "MONTHLY"
+                      ? `${formatMoney(p.price)} / 월 ${formatMoney(p.monthly_rent)}`
+                      : formatMoney(p.price)}
+                  </strong>
+                  <span className="result-ppp tnum">
+                    평당 {formatMoney(p.price_per_pyeong)}
+                  </span>
+                </div>
+                <div className="result-addr">{links.fullAddress}</div>
+                <div className="result-meta tnum">
+                  대지 {Math.round(p.land_area_sqm).toLocaleString()}㎡ (
+                  {Math.round(p.land_area_sqm / SQM_PER_PYEONG).toLocaleString()}
+                  평)
+                  {p.building_area_sqm > 0 &&
+                    ` · 연면적 ${Math.round(p.building_area_sqm).toLocaleString()}㎡ (${Math.round(p.building_area_sqm / SQM_PER_PYEONG).toLocaleString()}평)`}
+                  {` · ${BUILDING_USE_LABEL[p.building_main_use] ?? p.building_main_use}`}
+                </div>
+                <div className="result-tags">
+                  {p.land_use_zones.map((z) => (
+                    <span key={z} className="tag">
+                      {ZONE_LABEL[z] ?? z}
+                    </span>
+                  ))}
+                </div>
+
+                {/* 관심 매물 / 비교함 / 카톡·문자 공유 액션 */}
+                <div className="result-card-actions">
+                  <button
+                    type="button"
+                    aria-pressed={bookmarked}
+                    className={`btn-card-action ${bookmarked ? "is-bookmarked" : ""}`}
+                    onClick={() => {
+                      toggleBookmark(p);
+                      showToast(
+                        bookmarked
+                          ? "관심 매물에서 해제했습니다"
+                          : "관심 매물로 저장했습니다",
+                      );
+                    }}
+                  >
+                    <span>{bookmarked ? "★" : "☆"}</span>
+                    <span>{bookmarked ? "관심됨" : "관심 저장"}</span>
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={compared}
+                    className={`btn-card-action ${compared ? "is-compared" : ""}`}
+                    onClick={() => handleToggleCompare(p)}
+                  >
+                    <span>{compared ? "✓" : "+"}</span>
+                    <span>{compared ? "비교함" : "비교함 담기"}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-card-action"
+                    onClick={async () => {
+                      const ok = await copyTextToClipboard(
+                        formatPropertyShareText(p),
+                      );
+                      showToast(
+                        ok
+                          ? "카톡/문자 공유용 매물 정보를 복사했습니다"
+                          : "클립보드 복사에 실패했습니다",
+                      );
+                    }}
+                  >
+                    <span aria-hidden="true">📋</span>
+                    <span>카톡/문자 공유복사</span>
+                  </button>
+                </div>
+
+                {/* 매물 원본 정보 조회 외부 링크 모음 (4대 기본 + 접이식 확장 링크) */}
+                <div className="result-links">
+                  <span className="links-title">외부 조회:</span>
+                  <a
+                    href={links.naverLandUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="link-chip link-naver"
+                    title="네이버페이 부동산 매물 및 단지 지도 (새 창)"
+                  >
+                    네이버 부동산 ↗
+                  </a>
+                  <a
+                    href={links.cadastralUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="link-chip link-cadastral"
+                    title="네이버 지도 지적편집도 및 필지 경계선 조회 (새 창)"
+                  >
+                    지적편집도 ↗
+                  </a>
+                  <a
+                    href={links.valuemapUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="link-chip link-valuemap"
+                    title="밸류맵 토지·건물 실거래가 및 토지이용계획 조회 (새 창)"
+                  >
+                    밸류맵 실거래 ↗
+                  </a>
+                  <a
+                    href={links.kakaoMapUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="link-chip link-kakao"
+                    title="카카오맵 위치 및 로드뷰 (새 창)"
+                  >
+                    카카오맵 ↗
+                  </a>
+                  {showExtraLinks && (
+                    <>
+                      <a
+                        href={links.hogangnonoUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="link-chip link-hogangnono"
+                        title="호갱노노 실거래·학군·호재 조회 (새 창)"
+                      >
+                        호갱노노 ↗
+                      </a>
+                      <a
+                        href={links.asilUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="link-chip link-asil"
+                        title="아실 실거래·매물 증감 조회 (새 창)"
+                      >
+                        아실 ↗
+                      </a>
+                      <a
+                        href={links.kblandUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="link-chip link-kb"
+                        title="KB부동산 시세·지도 조회 (새 창)"
+                      >
+                        KB부동산 ↗
+                      </a>
+                    </>
+                  )}
+                  <button
+                    type="button"
+                    className="link-more-toggle"
+                    aria-expanded={showExtraLinks}
+                    onClick={() =>
+                      setExpandedLinks((prev) => ({
+                        ...prev,
+                        [p.property_id]: !prev[p.property_id],
+                      }))
+                    }
+                  >
+                    {showExtraLinks ? "접기 ▴" : "+ 호갱노노·아실·KB ▾"}
+                  </button>
+                </div>
+              </li>
+            );
+          })}
+
+          {status === "ready" && hasMore && (
+            <li className="load-more-wrap">
+              <button
+                type="button"
+                className="btn-load-more tnum"
+                disabled={loadingMore}
+                onClick={() => void fetchPage(items.length, true, sortBy)}
+              >
+                {loadingMore
+                  ? "불러오는 중…"
+                  : `더 보기 (${items.length.toLocaleString()} / ${totalCount.toLocaleString()}건)`}
+              </button>
+            </li>
+          )}
         </ul>
 
         <p className="modal-foot">
-          ※ 프로토타입용 가상 매물 데이터입니다. (법정동 10자리 표준 코드 기반)
+          ※ 본 매물 데이터는 v1.6 검색 시뮬레이션용 가상 데이터입니다. (국토교통부 표준 법정동 8자리 코드 기반)
         </p>
       </div>
     </div>

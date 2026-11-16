@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { Suspense, lazy, useEffect } from "react";
 import {
   useLayoutMode,
   useHoverCapable,
@@ -14,7 +14,15 @@ import {
 import { useCountStore, useFilterStore } from "./state-store/filterStore";
 import { MapView } from "./map-engine/MapView";
 import { SearchPanel } from "./core-ui/SearchPanel";
-import { ResultsModal } from "./core-ui/ResultsModal";
+
+const ResultsModal = lazy(() =>
+  import("./core-ui/ResultsModal").then((m) => ({ default: m.ResultsModal })),
+);
+const BookmarkCompareModal = lazy(() =>
+  import("./core-ui/BookmarkCompareModal").then((m) => ({
+    default: m.BookmarkCompareModal,
+  })),
+);
 
 export function App() {
   const layout = useLayoutMode();
@@ -25,10 +33,15 @@ export function App() {
   const geoPending = useGeoStore((s) => s.pending);
   const toast = useUiStore((s) => s.toast);
   const drawerOpen = useUiStore((s) => s.drawerOpen);
+  const sheetSnap = useUiStore((s) => s.sheetSnap);
   const resultsOpen = useUiStore((s) => s.resultsOpen);
+  const compareOpen = useUiStore((s) => s.compareOpen);
+  const bookmarksOpen = useUiStore((s) => s.bookmarksOpen);
   const miniCard = useUiStore((s) => s.miniCard);
   const setMiniCard = useUiStore((s) => s.setMiniCard);
   const setResultsOpen = useUiStore((s) => s.setResultsOpen);
+  const setCompareOpen = useUiStore((s) => s.setCompareOpen);
+  const setBookmarksOpen = useUiStore((s) => s.setBookmarksOpen);
   const showToast = useUiStore((s) => s.showToast);
 
   const region = useRegionStore();
@@ -51,6 +64,11 @@ export function App() {
         return;
       }
       if (e.key === "Escape") {
+        if (compareOpen || bookmarksOpen) {
+          setCompareOpen(false);
+          setBookmarksOpen(false);
+          return;
+        }
         if (resultsOpen) {
           setResultsOpen(false);
           return;
@@ -66,12 +84,16 @@ export function App() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [
+    compareOpen,
+    bookmarksOpen,
     resultsOpen,
     resetRegion,
     resetFilter,
     setMiniCard,
     showToast,
     setResultsOpen,
+    setCompareOpen,
+    setBookmarksOpen,
   ]);
 
   // 미니 카드 선택 여부 및 실시간 매물 건수 계산
@@ -111,13 +133,24 @@ export function App() {
         </div>
       )}
 
-      {/* 매물 결과 모달 */}
-      <ResultsModal />
+      {/* 매물 결과 모달 (코드 스플리팅) */}
+      {resultsOpen && (
+        <Suspense fallback={null}>
+          <ResultsModal />
+        </Suspense>
+      )}
+
+      {/* 관심 매물 & 비교함 모달 (코드 스플리팅) */}
+      {(compareOpen || bookmarksOpen) && (
+        <Suspense fallback={null}>
+          <BookmarkCompareModal />
+        </Suspense>
+      )}
 
       {/* FR-11: 모바일·태블릿 탭 미니 요약 카드 */}
       {miniCard && (
         <div
-          className={`mini-card layout-${layout}`}
+          className={`mini-card layout-${layout} snap-${sheetSnap}`}
           role="dialog"
           aria-label="선택 행정구역 요약"
         >

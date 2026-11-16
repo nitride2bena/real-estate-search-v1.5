@@ -132,7 +132,7 @@ export function SidoStep() {
 
       {!sido.length && (
         <div className="chip-grid" aria-busy="true">
-          {Array.from({ length: 17 }, (_, i) => (
+          {Array.from({ length: 16 }, (_, i) => (
             <span key={i} className="skeleton chip-skel" />
           ))}
         </div>

@@ -39,11 +39,21 @@ export function useLayoutMode(): LayoutMode {
     }
 
     let prevMode = getMode();
+    let prevTabletPortrait = isTabletPortrait();
 
     const onResize = () => {
       const nextMode = getMode();
+      const nextTabletPortrait = isTabletPortrait();
+      if (nextMode !== prevMode || nextTabletPortrait !== prevTabletPortrait) {
+        if (nextTabletPortrait) {
+          useUiStore.getState().setDrawerOpen(false);
+        } else if (nextMode === "desktop" || (prevTabletPortrait && nextMode === "tablet")) {
+          useUiStore.getState().setDrawerOpen(true);
+        }
+        prevMode = nextMode;
+        prevTabletPortrait = nextTabletPortrait;
+      }
       setMode(nextMode);
-      prevMode = nextMode;
     };
 
     window.addEventListener("resize", onResize);
@@ -186,6 +196,8 @@ export function hydrateFromUrl(search?: string | URLSearchParams): boolean {
     params.has("pyeong") ||
     params.has("land") ||
     params.has("bldg") ||
+    params.has("landUnit") ||
+    params.has("bldgUnit") ||
     params.has("zones") ||
     params.has("uses");
 
